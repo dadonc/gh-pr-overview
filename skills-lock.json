@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "skills": {
+    "extension-analyze": {
+      "source": "quangpl/browser-extension-skills",
+      "sourceType": "github",
+      "skillPath": "skills/extension-analyze/SKILL.md",
+      "computedHash": "206f2d80185294d5ebef49998795a360ac3423ce8dc938f6ec44b81668c951ac"
+    },
+    "extension-create": {
+      "source": "quangpl/browser-extension-skills",
+      "sourceType": "github",
+      "skillPath": "skills/extension-create/SKILL.md",
+      "computedHash": "1f86c9fb98afc357e2779a3c222a8cc142167439fa5cfd646f483080963b8676"
+    },
+    "extension-dev": {
+      "source": "quangpl/browser-extension-skills",
+      "sourceType": "github",
+      "skillPath": "skills/extension-dev/SKILL.md",
+      "computedHash": "6aaae9281a28cfa5a598c0c5b39c54b14f8e8c724be4983d6002f934accfaeaf"
+    },
+    "extension-manifest": {
+      "source": "quangpl/browser-extension-skills",
+      "sourceType": "github",
+      "skillPath": "skills/extension-manifest/SKILL.md",
+      "computedHash": "77ea35ad83ff2d3424b2971a2673ded255a91bb946137a120a12c85c0f70bda4"
+    },
+    "extension-test": {
+      "source": "quangpl/browser-extension-skills",
+      "sourceType": "github",
+      "skillPath": "skills/extension-test/SKILL.md",
+      "computedHash": "d3174911b1160f8f3dc8129acbf4a69174677cfbb5e1aad42975bd6075156c0a"
+    },
+    "extension-ui": {
+      "source": "quangpl/browser-extension-skills",
+      "sourceType": "github",
+      "skillPath": "skills/extension-ui/SKILL.md",
+      "computedHash": "dc508ba6f8e731964b57993da8b5c31215c5ada62fda08eba7b1b99b52ff232e"
+    }
+  }
+}
