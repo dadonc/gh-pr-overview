@@ -44,3 +44,21 @@ describe('domain data contracts', () => {
     expect(summary.totalComments).toEqual(ready);
   });
 });
+
+if (false) {
+  // @ts-expect-error Ready states require data.
+  const missingReadyData: SectionState<TotalComments> = { status: 'ready' };
+  // @ts-expect-error TotalComments href is a required string.
+  const wrongCommentHref: TotalComments = { count: 1, href: 1 };
+  const participation: AgentParticipation = {
+    agentId: 'gemini',
+    responseCount: 0,
+    requestSources: [],
+    state: 'requested',
+  };
+  // @ts-expect-error Consumers cannot mutate request-source provenance.
+  participation.requestSources.push('eyes-reaction');
+
+  void missingReadyData;
+  void wrongCommentHref;
+}

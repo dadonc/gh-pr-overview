@@ -35,6 +35,27 @@ describe('classifyReviewThreads', () => {
       total: 2,
     });
   });
+
+  it.each([
+    {
+      threads: [
+        { id: 'thread-1', isResolved: false, isOutdated: false },
+        { id: 'thread-1', isResolved: false, isOutdated: true },
+      ],
+    },
+    {
+      threads: [
+        { id: 'thread-1', isResolved: false, isOutdated: true },
+        { id: 'thread-1', isResolved: false, isOutdated: false },
+      ],
+    },
+  ])('keeps an outdated duplicate out of the unresolved bucket in either order', ({ threads }) => {
+    expect(classifyReviewThreads(threads)).toEqual({
+      unresolved: 0,
+      resolvedOrOutdated: 1,
+      total: 1,
+    });
+  });
 });
 
 describe('normalizeAgentLogin', () => {
@@ -113,6 +134,43 @@ describe('aggregateAgentParticipation', () => {
       { agentId: 'coderabbit', responseCount: 1, requestSources: ['formal-review-request'], state: 'responded' },
       { agentId: 'copilot', responseCount: 0, requestSources: ['eyes-reaction'], state: 'requested' },
       { agentId: 'devin', responseCount: 0, requestSources: ['started-reviewing'], state: 'requested' },
+    ]);
+  });
+
+  it('keeps request and event provenance when their ids collide with a response', () => {
+    const participation = aggregateAgentParticipation({
+      comments: [{ id: 'shared-id', actorLogin: 'gemini-cli' }],
+      reviewRequests: [{ id: 'shared-id', requestedLogin: 'gemini-cli' }],
+      reviewEvents: [{ id: 'shared-id', actorLogin: 'gemini-cli', action: 'started-reviewing' }],
+    });
+
+    expect(participation).toEqual([
+      {
+        agentId: 'gemini',
+        responseCount: 1,
+        requestSources: ['formal-review-request', 'started-reviewing'],
+        state: 'responded',
+      },
+    ]);
+  });
+
+  it('preserves all request provenance after a later response', () => {
+    const participation = aggregateAgentParticipation({
+      reviewRequests: [{ id: 'request-1', requestedLogin: 'coderabbitai' }],
+      reviewEvents: [
+        { id: 'event-1', actorLogin: 'coderabbitai', action: 'started-reviewing' },
+      ],
+      reactions: [{ id: 'reaction-1', actorLogin: 'coderabbitai', content: 'eyes' }],
+      comments: [{ id: 'comment-1', actorLogin: 'coderabbitai' }],
+    });
+
+    expect(participation).toEqual([
+      {
+        agentId: 'coderabbit',
+        responseCount: 1,
+        requestSources: ['formal-review-request', 'started-reviewing', 'eyes-reaction'],
+        state: 'responded',
+      },
     ]);
   });
 

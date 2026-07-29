@@ -59,7 +59,7 @@ export interface AgentParticipation {
   agentId: AgentId;
   responseCount: number;
   /** Provenance is retained even when `state` is `responded`. */
-  requestSources: RequestSource[];
+  requestSources: readonly RequestSource[];
   /** A response always takes precedence over one or more request signals. */
   state: 'requested' | 'responded';
 }
@@ -155,7 +155,9 @@ export function aggregateAgentParticipation(
     AgentId,
     { requestSources: Set<RequestSource>; responseCount: number }
   >();
-  const seenArtifactIds = new Set<string>();
+  const seenResponseIds = new Set<string>();
+  const seenReviewEventIds = new Set<string>();
+  const seenReviewRequestIds = new Set<string>();
   const seenReactionIds = new Set<string>();
 
   const getParticipation = (agentId: AgentId) => {
@@ -173,10 +175,10 @@ export function aggregateAgentParticipation(
       return;
     }
 
-    if (seenArtifactIds.has(artifact.id)) {
+    if (seenResponseIds.has(artifact.id)) {
       return;
     }
-    seenArtifactIds.add(artifact.id);
+    seenResponseIds.add(artifact.id);
     getParticipation(agentId).responseCount += 1;
   };
 
@@ -195,10 +197,10 @@ export function aggregateAgentParticipation(
       continue;
     }
 
-    if (seenArtifactIds.has(request.id)) {
+    if (seenReviewRequestIds.has(request.id)) {
       continue;
     }
-    seenArtifactIds.add(request.id);
+    seenReviewRequestIds.add(request.id);
     getParticipation(agentId).requestSources.add('formal-review-request');
   }
 
@@ -208,10 +210,10 @@ export function aggregateAgentParticipation(
       continue;
     }
 
-    if (seenArtifactIds.has(event.id)) {
+    if (seenReviewEventIds.has(event.id)) {
       continue;
     }
-    seenArtifactIds.add(event.id);
+    seenReviewEventIds.add(event.id);
     getParticipation(agentId).requestSources.add('started-reviewing');
   }
 
