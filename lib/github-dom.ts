@@ -244,9 +244,21 @@ export function extractPullRequestRows(document: Document): PullRequestRowExtrac
     const recognizedCounter = counterAnchors.find((anchor) =>
       /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.getAttribute('aria-label') ?? ''),
     );
-    const commentLikeWithoutAria = [...row.querySelectorAll<HTMLAnchorElement>('a:not([aria-label])')].some((anchor) =>
-      /\bcomments?\b/i.test(`${anchor.className} ${anchor.getAttribute('href') ?? ''} ${anchor.textContent ?? ''}`),
-    );
+    const commentLikeWithoutAria = [...row.querySelectorAll<HTMLAnchorElement>('a:not([aria-label])')].some((anchor) => {
+      if (anchor === pullLink) return false;
+      const href = anchor.getAttribute('href') ?? '';
+      const className = anchor.className;
+      const role = anchor.getAttribute('role') ?? '';
+      return (
+        /#(?:comments?|issuecomment-)/i.test(href) ||
+        /(?:^|\s)(?:comments?-link|comments?-count)(?:\s|$)/i.test(className) ||
+        /comment/i.test(role) ||
+        Boolean(
+          anchor.closest('[data-comment-count], .js-comments-count, .js-comment-count') ||
+            anchor.querySelector('svg[aria-label*="comment" i], [data-comment-count]'),
+        )
+      );
+    });
     const nativeComments: NativeCommentCount = recognizedCounter?.getAttribute('href')
       ? {
           count: Number((recognizedCounter.getAttribute('aria-label') ?? '').match(/[\d,]+/)![0].replaceAll(',', '')),

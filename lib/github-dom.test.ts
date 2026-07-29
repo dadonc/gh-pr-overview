@@ -88,6 +88,16 @@ describe('extractPullRequestRows', () => {
       { status: 'zero' },
     ]);
   });
+
+  it('does not mistake a canonical pull title containing comments for a malformed counter', () => {
+    const [row] = extractPullRequestRows(parse(`
+      <div id="issue_4" class="js-issue-row">
+        <a class="Link--primary" href="/o/r/pull/4">Fix comments parsing</a>
+      </div>
+    `));
+
+    expect(row?.nativeComments).toEqual({ status: 'zero' });
+  });
 });
 
 describe('extractTimeline', () => {

@@ -57,3 +57,14 @@
 - `npm test` — **4 test files and 46 tests passed**.
 - `npm run compile` — `tsc --noEmit` exited successfully.
 - `git diff --check` — exited successfully with no whitespace errors.
+
+## Final counter-review fix
+
+- Restricted non-ARIA malformed-counter detection to counter-specific href, role, icon, container, or class evidence. The canonical pull title link is explicitly excluded, so titles containing “comment(s)” retain the genuine omitted-counter zero state.
+
+### Final counter red/green evidence
+
+- `npm test -- lib/github-dom.test.ts` after adding the canonical-title regression produced **1 failure**: `Fix comments parsing` was incorrectly returned as a malformed counter.
+- `npm test -- lib/github-dom.test.ts` — **24 tests passed**.
+- `npm test` — **4 test files and 47 tests passed**.
+- `npm run compile` and `git diff --check` exited successfully.
