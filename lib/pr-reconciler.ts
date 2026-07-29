@@ -57,11 +57,22 @@ function extractionForRow(document: Document, row: HTMLElement): PullRequestRowE
   return key ? extractPullRequestRows(document).find((candidate) => identityKey(candidate.identity) === key) : undefined;
 }
 
-function nativeCounter(row: HTMLElement): HTMLAnchorElement | undefined {
-  return [...row.querySelectorAll<HTMLAnchorElement>('a[href]')].find((anchor) => {
-    if (anchor.closest('github-pr-overview')) return false;
+function isCanonicalPullTitle(anchor: HTMLAnchorElement, extraction: PullRequestRowExtraction): boolean {
+  const url = new URL(anchor.href, 'https://github.com');
+  return url.hash === '' && url.pathname.toLowerCase() === `/${extraction.identity.owner}/${extraction.identity.repository}/pull/${extraction.identity.number}`.toLowerCase();
+}
+
+/** Mirrors the extractor's counter semantics and never mistakes the PR title for a counter. */
+function nativeCounter(row: HTMLElement, extraction: PullRequestRowExtraction): HTMLAnchorElement | undefined {
+  const anchors = [...row.querySelectorAll<HTMLAnchorElement>('a')].filter((anchor) =>
+    !anchor.closest('github-pr-overview') && !isCanonicalPullTitle(anchor, extraction),
+  );
+  const ready = anchors.find((anchor) => /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.getAttribute('aria-label') ?? ''));
+  if (ready) return ready;
+  if (extraction.nativeComments.status === 'zero') return undefined;
+  return anchors.find((anchor) => {
     const label = anchor.getAttribute('aria-label') ?? '';
-    return /comments?/i.test(label) || /comments?/i.test(anchor.className) || /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.textContent ?? '');
+    return /comments?/i.test(label) || /(?:^|\s)(?:comments?-link|comments?-count)(?:\s|$)/i.test(anchor.className) || /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.textContent ?? '');
   });
 }
 
@@ -117,19 +128,26 @@ class RowController {
   ) {
     this.currentExtraction = extraction;
     this.authoredAttribute = row.getAttribute('data-pr-overview-authored');
-    const counter = nativeCounter(row);
+    const counter = nativeCounter(row, extraction);
     this.anchor = counter ?? this.createZeroAnchor();
     this.anchorSnapshot = this.snapshot(this.anchor);
-    this.hideNative(this.anchor);
-    this.setAuthoredAttribute();
     this.pendingProps = this.props(loadingSummary(extraction));
-    Promise.resolve(uiFactory.mount(this.anchor, this.pendingProps)).then((mounted) => {
-      if (this.disposed) { mounted.remove(); return; }
-      this.mounted = mounted;
-      mounted.update(this.pendingProps);
-    });
     this.nativeObserver = new MutationObserver(() => this.refreshNative());
     this.nativeObserver.observe(this.anchor, { attributes: true, attributeFilter: ['aria-label', 'href'], childList: true, characterData: true, subtree: true });
+    let mounting: MountedCard | Promise<MountedCard>;
+    try {
+      mounting = uiFactory.mount(this.anchor, this.pendingProps);
+    } catch {
+      this.dispose();
+      return;
+    }
+    Promise.resolve(mounting).then((mounted) => {
+      if (this.disposed) { mounted.remove(); return; }
+      this.mounted = mounted;
+      this.hideNative(this.anchor);
+      this.setAuthoredAttribute();
+      mounted.update(this.pendingProps);
+    }).catch(() => this.dispose());
     if (IntersectionObserverCtor) {
       const observer = new IntersectionObserverCtor((entries) => {
         if (entries.some((entry) => entry.isIntersecting)) {
@@ -148,7 +166,7 @@ class RowController {
     const anchor = this.document.createElement('a');
     anchor.setAttribute('data-pr-overview-zero-anchor', '');
     anchor.href = `/${this.currentExtraction.identity.owner}/${this.currentExtraction.identity.repository}/pull/${this.currentExtraction.identity.number}`;
-    const target = this.row.querySelector('.comment-area, .js-issue-meta, .opened-by') ?? this.row;
+    const target = this.row.querySelector('.comment-area, [data-testid="issue-row-end"], .js-issue-meta, .js-issue-row-meta, .opened-by') ?? this.row;
     target.append(anchor);
     this.extensionAnchor = anchor;
     return anchor;
@@ -190,6 +208,7 @@ class RowController {
     if (this.disposed) return;
     const extraction = extractionForRow(this.document, this.row);
     if (!extraction) return;
+    if (identityKey(extraction.identity) !== identityKey(this.currentExtraction.identity)) return;
     this.currentExtraction = extraction;
     this.render(this.props({ ...this.pendingProps.summary, totalComments: totalComments(extraction) }));
   }
@@ -200,7 +219,7 @@ class RowController {
   }
 
   matches(extraction: PullRequestRowExtraction): boolean {
-    const nextAnchor = nativeCounter(this.row);
+    const nextAnchor = nativeCounter(this.row, extraction);
     return identityKey(extraction.identity) === identityKey(this.currentExtraction.identity) && (nextAnchor ?? this.extensionAnchor) === this.anchor;
   }
 
@@ -257,7 +276,12 @@ export function createPageReconciler(options: PageReconcilerOptions) {
       if (records.every((record) => record.target.nodeType === 1 && Boolean((record.target as Element).closest('github-pr-overview')))) return;
       queueReconcile();
     });
-    observer.observe(options.document.documentElement, { childList: true, subtree: true });
+    observer.observe(options.document, {
+      attributeFilter: ['aria-label', 'content', 'data-hovercard-type', 'data-login', 'href'],
+      attributes: true,
+      childList: true,
+      subtree: true,
+    });
   };
   const clear = () => {
     currentEpoch += 1;

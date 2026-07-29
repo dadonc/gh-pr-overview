@@ -63,6 +63,73 @@ describe('page reconciler', () => {
     expect(mounts[0]!.remove).toHaveBeenCalledOnce();
   });
 
+  it('keeps a pull title mentioning comments visible and anchors the card at the real numeric counter', async () => {
+    const document = page(row(45, '<a aria-label="23 comments" href="/octo/demo/pull/45#issuecomment-23">23</a>').replace('A realistic pull request', 'Fix comments parsing'));
+    const title = document.querySelector<HTMLAnchorElement>('.Link--primary')!;
+    const counter = document.querySelector<HTMLAnchorElement>('[aria-label="23 comments"]')!;
+    let mountedAt: Element | undefined;
+    const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount(anchor) { mountedAt = anchor; return { remove: vi.fn(), update: vi.fn() }; } } });
+    reconciler.reconcile();
+    await Promise.resolve();
+    expect(title.hidden).toBe(false);
+    expect(counter.hidden).toBe(true);
+    expect(mountedAt).toBe(counter);
+  });
+
+  it('hides an aria-labeled malformed counter even when GitHub omitted its href', async () => {
+    const document = page(row(46, '<a class="comments-link" aria-label="many comments">many</a>'));
+    const malformed = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    let initial: any;
+    const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount(anchor, props) { initial = { anchor, props }; return { remove: vi.fn(), update: vi.fn() }; } } });
+    reconciler.reconcile();
+    await Promise.resolve();
+    expect(initial.anchor).toBe(malformed);
+    expect(initial.props.summary.totalComments).toEqual({ message: 'GitHub comment counter is malformed.', status: 'error' });
+    expect(malformed.hidden).toBe(true);
+  });
+
+  it('does not hide native UI until an async replacement mounts and restores state after mount failures or disposal races', async () => {
+    const document = page(row());
+    const native = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    let resolve!: (mount: { remove(): void; update(): void }) => void;
+    const deferred = new Promise<{ remove(): void; update(): void }>((done) => { resolve = done; });
+    const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount() { return deferred; } } });
+    reconciler.reconcile();
+    expect(native.hidden).toBe(false);
+    const remove = vi.fn(); resolve({ remove, update: vi.fn() });
+    await Promise.resolve();
+    expect(native.hidden).toBe(true);
+    reconciler.cleanup();
+    expect(native.hidden).toBe(false);
+    expect(remove).toHaveBeenCalledOnce();
+
+    const failed = page(row());
+    const failedNative = failed.querySelector<HTMLAnchorElement>('.comments-link')!;
+    createPageReconciler({ document: failed, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount() { throw new Error('mount failed'); } } }).reconcile();
+    await Promise.resolve();
+    expect(failedNative.hidden).toBe(false);
+
+    const rejected = page(row());
+    const rejectedNative = rejected.querySelector<HTMLAnchorElement>('.comments-link')!;
+    let reject!: (reason: Error) => void;
+    const rejectMount = new Promise<{ remove(): void; update(): void }>((_resolve, fail) => { reject = fail; });
+    createPageReconciler({ document: rejected, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount() { return rejectMount; } } }).reconcile();
+    reject(new Error('async mount failed'));
+    await Promise.resolve(); await Promise.resolve();
+    expect(rejectedNative.hidden).toBe(false);
+
+    const racing = page(row());
+    const racingNative = racing.querySelector<HTMLAnchorElement>('.comments-link')!;
+    let resolveRace!: (mount: { remove(): void; update(): void }) => void;
+    const race = new Promise<{ remove(): void; update(): void }>((done) => { resolveRace = done; });
+    const raceRemove = vi.fn();
+    const raceReconciler = createPageReconciler({ document: racing, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount() { return race; } } });
+    raceReconciler.reconcile(); raceReconciler.cleanup(); resolveRace({ remove: raceRemove, update: vi.fn() });
+    await Promise.resolve();
+    expect(racingNative.hidden).toBe(false);
+    expect(raceRemove).toHaveBeenCalledOnce();
+  });
+
   it('creates and removes a zero-count anchor and remounts when GitHub replaces it', () => {
     const document = page(row(43, ''));
     const client = { loadPullRequest: vi.fn(async () => remote) };
@@ -125,6 +192,34 @@ describe('page reconciler', () => {
     reconciler.cleanup();
     await Promise.resolve();
     expect(mount).toHaveBeenCalledTimes(2);
+  });
+
+  it('automatically remounts a reused row after GitHub changes its pull href and updates native labels', async () => {
+    const document = page(row());
+    const calls: AbortSignal[] = [];
+    const client = { loadPullRequest: vi.fn((_identity, signal?: AbortSignal) => { calls.push(signal!); return new Promise<PullRequestRemoteSummary>(() => {}); }) };
+    const updates: any[] = [];
+    const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount(_anchor, props) { updates.push(props); return { remove: vi.fn(), update(next) { updates.push(next); } }; } } });
+    reconciler.reconcile();
+    await Promise.resolve();
+    const title = document.querySelector<HTMLAnchorElement>('.Link--primary')!;
+    const counter = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    title.setAttribute('href', '/octo/demo/pull/43'); counter.setAttribute('href', '/octo/demo/pull/43#comments'); counter.setAttribute('aria-label', 'many comments');
+    await vi.waitFor(() => expect(client.loadPullRequest).toHaveBeenCalledTimes(2));
+    expect(calls[0]!.aborted).toBe(true);
+    expect(updates.some((entry) => entry.summary.totalComments.status === 'error')).toBe(true);
+  });
+
+  it('automatically propagates malformed and repaired native aria labels without an explicit reconciliation call', async () => {
+    const document = page(row());
+    const native = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    const totals: any[] = [];
+    const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount(_anchor, props) { totals.push(props.summary.totalComments); return { remove: vi.fn(), update(next) { totals.push(next.summary.totalComments); } }; } } });
+    reconciler.reconcile(); await Promise.resolve();
+    native.setAttribute('aria-label', 'many comments');
+    await vi.waitFor(() => expect(totals).toContainEqual({ message: 'GitHub comment counter is malformed.', status: 'error' }));
+    native.setAttribute('aria-label', '24 comments');
+    await vi.waitFor(() => expect(totals).toContainEqual({ data: { count: 24, href: '/octo/demo/pull/42#issuecomment-23' }, status: 'ready' }));
   });
 
   it('reconciles inserted and removed rows idempotently, falls back to immediate loads, and ignores stale aborted results', async () => {
