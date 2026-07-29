@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import diffAggregateHtml from '../test/fixtures/github/diff-aggregate.html?raw';
+import diffRenderedPartialHtml from '../test/fixtures/github/diff-rendered-partial.html?raw';
 import timelineHtml from '../test/fixtures/github/timeline.html?raw';
 import {
   createFetchLimiter,
@@ -60,6 +61,9 @@ describe('GitHub pull-request data pipeline', () => {
       '/octo%2fdemo/pull/42/timeline?after=cursor',
       '/octo/demo/pull/%2e%2e/timeline?after=cursor',
       '/octo\\demo/pull/42/timeline?after=cursor',
+      '/octo/demo/pull/./42/timeline?after=cursor',
+      '/octo/demo/pull/42/../42/timeline?after=cursor',
+      '//github.com/octo/demo/pull/42/timeline?after=cursor',
       '/octo/demo/issues/42',
     ]) {
       expect(isAllowedPullRequestUrl(candidate, identity, 'fragment')).toBe(false);
@@ -76,6 +80,42 @@ describe('GitHub pull-request data pipeline', () => {
     const result = await clientFor(fetcher).loadPullRequest(identity, signal);
 
     expect(fetcher).toHaveBeenCalled();
+    expect(result.reviewThreads.status).toBe('error');
+    expect(result.agents.status).toBe('error');
+  });
+
+  it('does not fetch rejected dot-segment or protocol-relative timeline loaders', async () => {
+    const conversation = '<div id="discussion_bucket"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/./42/timeline?after=one"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="//github.com/octo/demo/pull/42/timeline?after=two"></div>';
+    const fetcher = vi.fn(async (url: RequestInfo | URL) =>
+      response(String(url).endsWith('/files') ? diffAggregateHtml : conversation, String(url)),
+    );
+
+    const result = await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(result.reviewThreads.status).toBe('partial');
+  });
+
+  it('accepts a public conversation containing a sign-in header and discussion text about access denial', async () => {
+    const publicConversation = '<a href="/login">Sign in</a><div id="discussion_bucket"></div><article id="issuecomment-1">The deploy says access denied, but the PR is public.</article>';
+    const fetcher = vi.fn(async (url: RequestInfo | URL) =>
+      response(String(url).endsWith('/files') ? diffAggregateHtml : publicConversation, String(url)),
+    );
+
+    const result = await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(result.reviewThreads.status).toBe('ready');
+    expect(result.agents.status).toBe('ready');
+  });
+
+  it('rejects a real GitHub session login page', async () => {
+    const loginPage = '<title>Sign in to GitHub · GitHub</title><form action="/session"><input name="login"></form>';
+    const fetcher = vi.fn(async (url: RequestInfo | URL) =>
+      response(String(url).endsWith('/files') ? diffAggregateHtml : loginPage, String(url)),
+    );
+
+    const result = await clientFor(fetcher).loadPullRequest(identity);
+
     expect(result.reviewThreads.status).toBe('error');
     expect(result.agents.status).toBe('error');
   });
@@ -98,6 +138,20 @@ describe('GitHub pull-request data pipeline', () => {
     expect(result.agents).toMatchObject({ status: 'ready' });
   });
 
+  it('deduplicates case-variant fragment paths without changing opaque query values', async () => {
+    const conversation = '<div id="discussion_bucket"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=CaseSensitiveToken"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/OCTO/DEMO/PULL/42/TIMELINE?after=CaseSensitiveToken"></div>';
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      const value = String(url);
+      if (value.endsWith('/files')) return response(diffAggregateHtml, value);
+      if (value.includes('CaseSensitiveToken')) return response('<div id="discussion_bucket"></div>', value);
+      return response(conversation, value);
+    });
+
+    await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(fetcher.mock.calls.filter(([url]) => String(url).includes('CaseSensitiveToken'))).toHaveLength(1);
+  });
+
   it('marks thread and agent counts partial when the fragment cap is reached', async () => {
     const loaders = Array.from({ length: 21 }, (_, index) =>
       `<div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=${index}"></div>`,
@@ -114,6 +168,22 @@ describe('GitHub pull-request data pipeline', () => {
     expect(result.agents.status).toBe('partial');
   });
 
+  it('retries a capped partial result instead of caching it', async () => {
+    const loaders = Array.from({ length: 21 }, (_, index) =>
+      `<div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=${index}"></div>`,
+    ).join('');
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      const value = String(url);
+      return response(value.endsWith('/files') ? diffAggregateHtml : loaders, value);
+    });
+    const client = clientFor(fetcher);
+
+    expect((await client.loadPullRequest(identity)).reviewThreads.status).toBe('partial');
+    expect((await client.loadPullRequest(identity)).reviewThreads.status).toBe('partial');
+
+    expect(fetcher).toHaveBeenCalledTimes(44);
+  });
+
   it('keeps accumulated conversation data as partial when a timeline fragment or files page fails', async () => {
     const conversation = '<div class="js-resolvable-timeline-thread-container" data-resolved="false"><input name="pull_request_review_thread_id" value="PRRT_one"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=next"></div>';
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
@@ -126,6 +196,19 @@ describe('GitHub pull-request data pipeline', () => {
 
     expect(result.diff.status).toBe('error');
     expect(result.reviewThreads).toMatchObject({ status: 'partial', data: { total: 1 } });
+    expect(result.agents.status).toBe('partial');
+  });
+
+  it('makes timeline-derived sections lower-bound partial when the files extractor is incomplete', async () => {
+    const conversation = '<div id="discussion_bucket"></div><div class="js-resolvable-timeline-thread-container" data-resolved="false"><input name="pull_request_review_thread_id" value="PRRT_one"></div>';
+    const fetcher = vi.fn(async (url: RequestInfo | URL) =>
+      response(String(url).endsWith('/files') ? diffRenderedPartialHtml : conversation, String(url)),
+    );
+
+    const result = await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(result.diff.status).toBe('partial');
+    expect(result.reviewThreads).toMatchObject({ data: { total: 1 }, status: 'partial' });
     expect(result.agents.status).toBe('partial');
   });
 
@@ -224,6 +307,57 @@ describe('GitHub pull-request data pipeline', () => {
     expect(fetcher).toHaveBeenCalledTimes(4);
   });
 
+  it('releases an aborted active limiter slot so queued work proceeds without exceeding the cap', async () => {
+    const limiter = createFetchLimiter(1);
+    const controller = new AbortController();
+    let active = 0;
+    let maximum = 0;
+    const first = limiter.run(controller.signal, () => new Promise<never>((_resolve, reject) => {
+      active += 1;
+      maximum = Math.max(maximum, active);
+      controller.signal.addEventListener('abort', () => {
+        active -= 1;
+        reject(new DOMException('aborted', 'AbortError'));
+      }, { once: true });
+    }));
+    const second = limiter.run(undefined, async () => {
+      active += 1;
+      maximum = Math.max(maximum, active);
+      active -= 1;
+      return 'queued work';
+    });
+
+    controller.abort();
+
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(second).resolves.toBe('queued work');
+    expect(maximum).toBe(1);
+  });
+
+  it('does not cache a completed load when its caller aborts before the responses settle', async () => {
+    const controller = new AbortController();
+    let delayed = true;
+    const resolvers: Array<(value: Response) => void> = [];
+    const noFragments = '<div id="discussion_bucket"></div>';
+    const fetcher = vi.fn((url: RequestInfo | URL) => {
+      const value = String(url);
+      if (!delayed) return Promise.resolve(response(value.endsWith('/files') ? diffAggregateHtml : noFragments, value));
+      return new Promise<Response>((resolve) => resolvers.push(resolve));
+    });
+    const client = clientFor(fetcher);
+    const pending = client.loadPullRequest(identity, controller.signal);
+
+    await Promise.resolve();
+    controller.abort();
+    resolvers[0]?.(response(noFragments, 'https://github.com/octo/demo/pull/42'));
+    resolvers[1]?.(response(diffAggregateHtml, 'https://github.com/octo/demo/pull/42/files'));
+    await pending;
+    delayed = false;
+    await client.loadPullRequest(identity);
+
+    expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+
   it('never exceeds four active fetches across concurrent PR loads', async () => {
     let active = 0;
     let maximum = 0;
@@ -252,7 +386,7 @@ describe('GitHub pull-request data pipeline', () => {
     await client.loadPullRequest(identity);
     await client.loadPullRequest({ number: 42, owner: 'OCTO', repository: 'DEMO' });
     await client.loadPullRequest({ ...identity, number: 43 });
-    now = 60_001;
+    now = 60_000;
     await client.loadPullRequest(identity);
 
     expect(fetcher).toHaveBeenCalledTimes(6);

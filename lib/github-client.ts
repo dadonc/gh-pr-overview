@@ -96,7 +96,11 @@ export function isAllowedPullRequestUrl(
   // WHATWG URL normalizes backslashes and dot segments. Reject their raw or
   // encoded spellings so validation never approves a different path than the
   // one GitHub ultimately receives.
-  if (/\\|%(?:2f|5c|2e)/i.test(candidate)) return false;
+  if (
+    candidate.trimStart().startsWith('//') ||
+    /(?:^|\/)\.\.?(?=\/|[?#]|$)/.test(candidate) ||
+    /\\|%(?:2f|5c|2e)/i.test(candidate)
+  ) return false;
 
   let url: URL;
   try {
@@ -178,6 +182,15 @@ function hasTimelineEvidence(document: Document): boolean {
   ));
 }
 
+function isAuthenticationDocument(document: Document): boolean {
+  const title = document.title.trim();
+  const sessionForm = document.querySelector('form[action="/session"], form[action^="/session?"]');
+  if (sessionForm && /^sign in to github(?:\s*[·-]\s*github)?$/i.test(title)) return true;
+  return Boolean(document.querySelector(
+    '[data-test-selector="sso-warning"], .js-sso-warning, [data-testid="sso-warning"], .flash-error[data-sso-warning]',
+  ));
+}
+
 export function createGitHubClient(options: GitHubClientOptions = {}) {
   const fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
   const clock = options.clock ?? Date.now;
@@ -207,11 +220,7 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
       const contentType = response.headers.get('content-type') ?? '';
       if (!/^text\/html(?:;|$)/i.test(contentType)) throw new Error('GitHub did not return HTML.');
       const document = parseDocument(await response.text());
-      const bodyText = document.body.textContent ?? '';
-      if (
-        /\b(?:access denied|sign in to github|single sign-on|sso authorization)\b/i.test(bodyText) ||
-        document.querySelector('form[action*="/session"], a[href^="/login"], [data-test-selector="sso-warning"]')
-      ) throw new Error('GitHub access was denied.');
+      if (isAuthenticationDocument(document)) throw new Error('GitHub access was denied.');
       return document;
     });
   };
@@ -257,6 +266,9 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
     let fetchFailed = !files.ok;
     if (!hasTimelineEvidence(conversation.document)) incompleteReasons.push('GitHub did not expose recognizable timeline evidence.');
     if (!files.ok) incompleteReasons.push('The files page could not be loaded for inline review data.');
+    if (files.ok && diff.status === 'partial') {
+      incompleteReasons.push(`The files page is incomplete for inline review data: ${diff.reason}`);
+    }
 
     const queuedFragments = [...extractTimeline(conversation.document).nextTimelineFragments];
     const seenFragments = new Set<string>();
@@ -273,7 +285,8 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
           incompleteReasons.push('GitHub exposed an invalid timeline fragment.');
           continue;
         }
-        const normalized = new URL(candidate, GITHUB_ORIGIN).href;
+        const url = new URL(candidate, GITHUB_ORIGIN);
+        const normalized = `${url.origin}${url.pathname.toLowerCase()}${url.search}`;
         if (seenFragments.has(normalized)) continue;
         seenFragments.add(normalized);
         batch.push(normalized);
@@ -309,7 +322,7 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
     });
 
     return {
-      cacheable: !fetchFailed,
+      cacheable: !fetchFailed && timelineComplete && diff.status === 'ready',
       summary: {
         agents: sectionFromCompleteness(agentData, timelineComplete, incompleteReasons),
         diff,
@@ -335,7 +348,7 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
       if (cached) cache.delete(key);
 
       const loaded = await loadUncached(identity, signal);
-      if (loaded.cacheable) cache.set(key, { expiresAt: clock() + CACHE_TTL_MS, summary: loaded.summary });
+      if (loaded.cacheable && !signal?.aborted) cache.set(key, { expiresAt: clock() + CACHE_TTL_MS, summary: loaded.summary });
       return loaded.summary;
     },
   };
