@@ -140,6 +140,18 @@ export function findPullRequestTitle(row: Element): {
     candidates[0];
 }
 
+export function findNativeCommentCounter(
+  row: Element,
+  title: HTMLAnchorElement | undefined = findPullRequestTitle(row)?.anchor,
+): HTMLAnchorElement | undefined {
+  const candidates = [...row.querySelectorAll<HTMLAnchorElement>('a')].filter(
+    (anchor) => anchor !== title && !anchor.closest('github-pr-overview'),
+  );
+  return candidates.find((anchor) =>
+    /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.getAttribute('aria-label') ?? ''),
+  ) ?? candidates.find(isCommentCounterCandidate);
+}
+
 function validatedNativeCounterHref(
   href: string | null,
   identity: PullRequestRowExtraction['identity'],
@@ -439,16 +451,7 @@ export function extractPullRequestRows(document: Document): PullRequestRowExtrac
     if (!title) return [];
     const { anchor: pullLink, identity } = title;
 
-    const counterAnchors = [...row.querySelectorAll<HTMLAnchorElement>('a[aria-label]')].filter(
-      (anchor) =>
-        anchor !== pullLink &&
-        /\bcomments?\b/i.test(anchor.getAttribute('aria-label') ?? ''),
-    );
-    const recognizedCounter = counterAnchors.find((anchor) =>
-      /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.getAttribute('aria-label') ?? ''),
-    );
-    const hasOtherCommentCandidate = [...row.querySelectorAll<HTMLAnchorElement>('a')]
-      .some((anchor) => anchor !== pullLink && isCommentCounterCandidate(anchor));
+    const recognizedCounter = findNativeCommentCounter(row, pullLink);
     const recognizedHref = recognizedCounter?.getAttribute('href');
     const recognizedCount = recognizedCounter
       ?.getAttribute('aria-label')
@@ -460,7 +463,7 @@ export function extractPullRequestRows(document: Document): PullRequestRowExtrac
           href: counterHref,
           status: 'ready',
         }
-      : hasOtherCommentCandidate
+      : recognizedCounter
         ? { reason: 'GitHub comment counter is malformed.', status: 'error' }
         : { status: 'zero' };
 

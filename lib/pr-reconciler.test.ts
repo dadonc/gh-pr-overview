@@ -85,6 +85,18 @@ describe('page reconciler', () => {
       'off-origin',
       '<a class="comments-link" href="https://evil.example/octo/demo/pull/45">many</a>',
     ],
+    [
+      'href-only',
+      '<a href="/octo/demo/pull/45#comments">many</a>',
+    ],
+    [
+      'role-only',
+      '<a role="comment" href="/octo/demo/pull/45#not-a-conversation">many</a>',
+    ],
+    [
+      'nested-icon',
+      '<span data-comment-count><a href="/octo/demo/pull/45#not-a-conversation"><svg aria-label="comment"></svg>many</a></span>',
+    ],
   ])('keeps a comment-count-looking title visible while replacing a %s counter with an error card', async (_kind, counterMarkup) => {
     const document = page(`
       <div id="issue_45" class="js-issue-row">
@@ -94,7 +106,7 @@ describe('page reconciler', () => {
       </div>
     `);
     const title = document.querySelector<HTMLAnchorElement>('.Link--primary')!;
-    const counter = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    const counter = document.querySelector<HTMLAnchorElement>('.comment-area a')!;
     let initial: any;
     const reconciler = createPageReconciler({
       document,

@@ -1,7 +1,11 @@
 import type { PullRequestSummary, SectionState, TotalComments } from './domain';
 import type { PullRequestRemoteSummary } from './github-client';
 import type { PullRequestRowExtraction } from './github-dom';
-import { extractPullRequestRows, findPullRequestTitle } from './github-dom';
+import {
+  extractPullRequestRows,
+  findNativeCommentCounter,
+  findPullRequestTitle,
+} from './github-dom';
 
 export interface PullRequestClient {
   loadPullRequest(identity: PullRequestRowExtraction['identity'], signal?: AbortSignal): Promise<PullRequestRemoteSummary>;
@@ -58,15 +62,7 @@ function extractionForRow(document: Document, row: HTMLElement): PullRequestRowE
 function nativeCounter(row: HTMLElement, extraction: PullRequestRowExtraction): HTMLAnchorElement | undefined {
   if (extraction.nativeComments.status === 'zero') return undefined;
   const title = findPullRequestTitle(row)?.anchor;
-  const anchors = [...row.querySelectorAll<HTMLAnchorElement>('a')].filter(
-    (anchor) => anchor !== title && !anchor.closest('github-pr-overview'),
-  );
-  const ready = anchors.find((anchor) => /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.getAttribute('aria-label') ?? ''));
-  if (ready) return ready;
-  return anchors.find((anchor) => {
-    const label = anchor.getAttribute('aria-label') ?? '';
-    return /comments?/i.test(label) || /(?:^|\s)(?:comments?-link|comments?-count)(?:\s|$)/i.test(anchor.className) || /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.textContent ?? '');
-  });
+  return findNativeCommentCounter(row, title);
 }
 
 function totalComments(extraction: PullRequestRowExtraction): SectionState<TotalComments> {
