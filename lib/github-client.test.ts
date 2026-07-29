@@ -285,6 +285,24 @@ describe('GitHub pull-request data pipeline', () => {
     expect(result.agents).toEqual({ data: [], status: 'ready' });
   });
 
+  it('reports an identifiable thread with unreadable state as partial instead of exact zero', async () => {
+    const conversation = `
+      <div id="discussion_bucket"></div>
+      <div class="js-resolvable-timeline-thread-container" data-review-thread-id="PRRT_unknown"></div>
+    `;
+    const fetcher = vi.fn(async (url: RequestInfo | URL) =>
+      response(String(url).endsWith('/files') ? diffAggregateHtml : conversation, String(url)),
+    );
+
+    const result = await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(result.reviewThreads).toEqual({
+      data: { resolvedOrOutdated: 0, total: 0, unresolved: 0 },
+      reason: 'A resolvable review thread had unreadable resolution or outdated state.',
+      status: 'partial',
+    });
+  });
+
   it('does not start an already-aborted queued fetch and forwards aborts to active work', async () => {
     const limiter = createFetchLimiter(1);
     let release!: () => void;

@@ -133,7 +133,9 @@ export function classifyReviewThreads(
   };
 }
 
-export function normalizeAgentLogin(login: string | null | undefined): AgentId | undefined {
+export function normalizeAgentAccountLogin(
+  login: string | null | undefined,
+): string | undefined {
   if (!login) {
     return undefined;
   }
@@ -145,7 +147,16 @@ export function normalizeAgentLogin(login: string | null | undefined): AgentId |
     .replace(/\[bot\]$/i, '')
     .toLowerCase();
 
-  return AI_AGENT_REGISTRY.find((agent) => agent.logins.includes(normalizedLogin))?.id;
+  return AI_AGENT_REGISTRY.some((agent) => agent.logins.includes(normalizedLogin))
+    ? normalizedLogin
+    : undefined;
+}
+
+export function normalizeAgentLogin(login: string | null | undefined): AgentId | undefined {
+  const accountLogin = normalizeAgentAccountLogin(login);
+  return accountLogin
+    ? AI_AGENT_REGISTRY.find((agent) => agent.logins.includes(accountLogin))?.id
+    : undefined;
 }
 
 export function aggregateAgentParticipation(
@@ -218,15 +229,17 @@ export function aggregateAgentParticipation(
   }
 
   for (const reaction of input.reactions ?? []) {
+    const accountLogin = normalizeAgentAccountLogin(reaction.actorLogin);
     const agentId = normalizeAgentLogin(reaction.actorLogin);
-    if (!agentId || reaction.content.toLowerCase() !== 'eyes') {
+    if (!accountLogin || !agentId || reaction.content.toLowerCase() !== 'eyes') {
       continue;
     }
 
-    if (seenReactionIds.has(reaction.id)) {
+    const reactionActorId = `${reaction.id}\0${accountLogin}`;
+    if (seenReactionIds.has(reactionActorId)) {
       continue;
     }
-    seenReactionIds.add(reaction.id);
+    seenReactionIds.add(reactionActorId);
     getParticipation(agentId).requestSources.add('eyes-reaction');
   }
 

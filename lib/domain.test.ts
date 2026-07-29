@@ -174,6 +174,21 @@ describe('aggregateAgentParticipation', () => {
     ]);
   });
 
+  it('deduplicates eyes reactions per reaction and concrete actor instead of globally', () => {
+    const participation = aggregateAgentParticipation({
+      reactions: [
+        { id: 'reaction-shared', actorLogin: 'gemini-cli', content: 'eyes' },
+        { id: 'reaction-shared', actorLogin: 'claude', content: 'eyes' },
+        { id: 'reaction-shared', actorLogin: 'gemini-cli[bot]', content: 'eyes' },
+      ],
+    });
+
+    expect(participation).toEqual([
+      { agentId: 'claude', responseCount: 0, requestSources: ['eyes-reaction'], state: 'requested' },
+      { agentId: 'gemini', responseCount: 0, requestSources: ['eyes-reaction'], state: 'requested' },
+    ]);
+  });
+
   it('ignores unknown bots, actorless artifacts, non-eyes reactions, and reactions as responses', () => {
     const participation = aggregateAgentParticipation({
       comments: [

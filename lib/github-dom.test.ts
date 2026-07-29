@@ -9,7 +9,7 @@ import {
   extractPullRequestRows,
   extractTimeline,
 } from './github-dom';
-import { classifyReviewThreads } from './domain';
+import { aggregateAgentParticipation, classifyReviewThreads } from './domain';
 
 const parse = (html: string) => new DOMParser().parseFromString(html, 'text/html');
 
@@ -87,6 +87,67 @@ describe('extractPullRequestRows', () => {
       { reason: 'GitHub comment counter is malformed.', status: 'error' },
       { status: 'zero' },
     ]);
+  });
+
+  it.each([
+    ['off-origin', 'https://evil.example/o/r/pull/1'],
+    ['insecure', 'http://github.com/o/r/pull/1'],
+    ['credentialed', 'https://user:secret@github.com/o/r/pull/1'],
+    ['explicit default port', 'https://github.com:443/o/r/pull/1'],
+    ['non-default port', 'https://github.com:444/o/r/pull/1'],
+    ['dangerous scheme', 'javascript:/o/r/pull/1'],
+  ])('rejects a %s pull title instead of deriving a canonical identity', (_name, href) => {
+    const rows = extractPullRequestRows(parse(`
+      <div id="issue_1" class="js-issue-row"><a href="${href}">one</a></div>
+    `));
+
+    expect(rows).toEqual([]);
+  });
+
+  it.each([
+    ['off-origin', 'https://evil.example/o/r/pull/1#issuecomment-1'],
+    ['cross-PR', '/o/r/pull/2#issuecomment-1'],
+    ['credentialed', 'https://user:secret@github.com/o/r/pull/1#issuecomment-1'],
+    ['explicit default port', 'https://github.com:443/o/r/pull/1#issuecomment-1'],
+    ['non-default port', 'https://github.com:444/o/r/pull/1#issuecomment-1'],
+    ['dangerous scheme', 'javascript:alert(1)'],
+    ['unexpected query', '/o/r/pull/1?return_to=https://evil.example'],
+    ['unexpected fragment', '/o/r/pull/1#not-a-conversation'],
+  ])('marks a recognized %s native counter destination as malformed', (_name, href) => {
+    const [row] = extractPullRequestRows(parse(`
+      <div id="issue_1" class="js-issue-row">
+        <a href="/o/r/pull/1">one</a>
+        <a aria-label="2 comments" href="${href}">2</a>
+      </div>
+    `));
+
+    expect(row?.nativeComments).toEqual({
+      reason: 'GitHub comment counter is malformed.',
+      status: 'error',
+    });
+  });
+
+  it.each([
+    '',
+    '#comments',
+    '#discussion_bucket',
+    '#issuecomment-2',
+    '#pullrequestreview-2',
+    '#discussion_r2',
+    '#discussion-diff-2',
+  ])('accepts a same-PR native counter with the known conversation anchor %s', (fragment) => {
+    const [row] = extractPullRequestRows(parse(`
+      <div id="issue_1" class="js-issue-row">
+        <a href="https://github.com/Octo/Demo/pull/1">one</a>
+        <a aria-label="2 comments" href="https://github.com/octo/demo/pull/1${fragment}">2</a>
+      </div>
+    `));
+
+    expect(row?.nativeComments).toEqual({
+      count: 2,
+      href: `https://github.com/octo/demo/pull/1${fragment}`,
+      status: 'ready',
+    });
   });
 
   it('does not mistake a canonical pull title containing comments for a malformed counter', () => {
@@ -199,6 +260,28 @@ describe('extractTimeline', () => {
     expect(artifacts.reactions).toEqual([{ actorLogin: 'claude', content: 'eyes', id: 'reaction-1' }]);
   });
 
+  it('tracks current formal requests per concrete allowlisted account before aggregating aliases', () => {
+    const result = extractTimeline(parse(`
+      <div id="request-code-assist" data-review-request-action="requested" data-review-requested-login="gemini-code-assist"></div>
+      <div id="request-cli" data-review-request-action="requested" data-review-requested-login="gemini-cli"></div>
+      <div id="remove-cli" data-review-request-action="removed" data-review-requested-login="gemini-cli"></div>
+    `));
+
+    expect(result.artifacts.currentReviewRequests).toEqual([
+      { id: 'request-code-assist', requestedLogin: 'gemini-code-assist' },
+    ]);
+    expect(aggregateAgentParticipation({
+      reviewRequests: result.artifacts.currentReviewRequests,
+    })).toEqual([
+      {
+        agentId: 'gemini',
+        requestSources: ['formal-review-request'],
+        responseCount: 0,
+        state: 'requested',
+      },
+    ]);
+  });
+
   it('does not retain a formal reviewer whose final structured event removes the request', () => {
     const document = parse(timelineHtml);
     document.querySelector('#event-rerequested')?.remove();
@@ -266,6 +349,22 @@ describe('extractTimeline', () => {
     ]);
   });
 
+  it('enumerates every identifiable allowlisted actor in one eyes-reaction container', () => {
+    const result = extractTimeline(parse(`
+      <div data-reaction-content="eyes" data-reaction-id="reaction-shared">
+        <a data-hovercard-url="/apps/gemini-cli/hovercard">Gemini</a>
+        <a data-hovercard-url="/apps/claude/hovercard">Claude</a>
+        <a data-hovercard-url="/apps/gemini-cli/hovercard">Gemini duplicate</a>
+        <a data-hovercard-url="/users/human/hovercard">Human</a>
+      </div>
+    `));
+
+    expect(result.artifacts.reactions).toEqual([
+      { actorLogin: 'gemini-cli', content: 'eyes', id: 'reaction-shared' },
+      { actorLogin: 'claude', content: 'eyes', id: 'reaction-shared' },
+    ]);
+  });
+
   it('uses typed DOM ids as response identities when a copy also has data-gid', () => {
     const result = extractTimeline(parse(`
       <article id="issuecomment-200" data-gid="gid://IssueComment/200"><header><a data-hovercard-url="/apps/gemini-cli/hovercard">Gemini</a></header></article>
@@ -273,6 +372,95 @@ describe('extractTimeline', () => {
     `));
 
     expect(result.artifacts.comments).toEqual([{ actorLogin: 'gemini-cli', id: 'issuecomment-200' }]);
+  });
+
+  it('unions response copies with differing typed ids through a shared structured identity', () => {
+    const result = extractTimeline([
+      parse(`
+        <div class="js-resolvable-timeline-thread-container" data-resolved="false">
+          <input name="pull_request_review_thread_id" value="PRRT_one">
+          <article id="discussion_r201" data-gid="gid://github/PullRequestReviewComment/201">
+            <header><a data-hovercard-url="/apps/gemini-cli/hovercard">Gemini</a></header>
+          </article>
+        </div>
+      `),
+      parse(`
+        <review-thread-collapsible data-resolved="false" data-review-thread-id="PRRT_one">
+          <article id="discussion-diff-99" data-gid="gid://github/PullRequestReviewComment/201">
+            <header><a data-hovercard-url="/apps/gemini-cli/hovercard">Gemini</a></header>
+          </article>
+        </review-thread-collapsible>
+      `),
+    ]);
+
+    expect(result.artifacts.inlineComments).toEqual([
+      { actorLogin: 'gemini-cli', id: 'discussion_r201' },
+    ]);
+    expect(aggregateAgentParticipation({
+      inlineComments: result.artifacts.inlineComments,
+    })).toEqual([
+      { agentId: 'gemini', requestSources: [], responseCount: 1, state: 'responded' },
+    ]);
+  });
+
+  it('keeps distinct inline responses and their parent review submission separate', () => {
+    const result = extractTimeline(parse(`
+      <article id="pullrequestreview-700" data-gid="gid://github/PullRequestReview/700">
+        <header><a data-hovercard-url="/apps/gemini-cli/hovercard">Gemini</a></header>
+      </article>
+      <div class="js-resolvable-timeline-thread-container" data-resolved="false">
+        <input name="pull_request_review_thread_id" value="PRRT_separate">
+        <article id="discussion_r701" data-gid="gid://github/PullRequestReviewComment/701">
+          <header><a data-hovercard-url="/apps/gemini-cli/hovercard">Gemini</a></header>
+        </article>
+        <article id="discussion_r702" data-gid="gid://github/PullRequestReviewComment/702">
+          <header><a data-hovercard-url="/apps/gemini-cli/hovercard">Gemini</a></header>
+        </article>
+      </div>
+    `));
+
+    expect(aggregateAgentParticipation({
+      inlineComments: result.artifacts.inlineComments,
+      reviews: result.artifacts.reviews,
+    })).toEqual([
+      { agentId: 'gemini', requestSources: [], responseCount: 3, state: 'responded' },
+    ]);
+  });
+
+  it('retains identifiable thread roots and marks unreadable thread state incomplete', () => {
+    const result = extractTimeline(parse(`
+      <div class="js-resolvable-timeline-thread-container" data-review-thread-id="PRRT_unknown">
+        <article id="discussion_r800"></article>
+      </div>
+      <review-thread-collapsible data-review-thread-id="PRRT_invalid" data-resolved="unknown" data-outdated="unknown">
+        <article id="discussion_r801"></article>
+      </review-thread-collapsible>
+      <review-thread-collapsible data-review-thread-id="PRRT_known_nonactive" data-resolved="true" data-outdated="unknown">
+        <article id="discussion_r802"></article>
+      </review-thread-collapsible>
+    `));
+
+    expect(result.threads).toEqual([
+      { id: 'PRRT_known_nonactive', isOutdated: false, isResolved: true },
+    ]);
+    expect(result.completeness).toEqual({
+      isComplete: false,
+      reasons: ['A resolvable review thread had unreadable resolution or outdated state.'],
+    });
+  });
+
+  it('reads resolution state from structured root data when data-resolved is absent', () => {
+    const result = extractTimeline(parse(`
+      <review-thread-collapsible
+        data-review-thread-id="PRRT_structured"
+        data-hydrate="{&quot;isResolved&quot;:true,&quot;isOutdated&quot;:false}"
+      ></review-thread-collapsible>
+    `));
+
+    expect(result.threads).toEqual([
+      { id: 'PRRT_structured', isOutdated: false, isResolved: true },
+    ]);
+    expect(result.completeness).toEqual({ isComplete: true, reasons: [] });
   });
 
   it('makes a skipped resolvable thread incomplete while retaining next fragment discovery', () => {
