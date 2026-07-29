@@ -260,10 +260,14 @@ export function extractPullRequestRows(document: Document): PullRequestRowExtrac
         )
       );
     });
-    const nativeComments: NativeCommentCount = recognizedCounter?.getAttribute('href')
+    const recognizedHref = recognizedCounter?.getAttribute('href');
+    const recognizedCount = recognizedCounter
+      ?.getAttribute('aria-label')
+      ?.match(/[\d,]+/)?.[0];
+    const nativeComments: NativeCommentCount = recognizedHref && recognizedCount
       ? {
-          count: Number((recognizedCounter.getAttribute('aria-label') ?? '').match(/[\d,]+/)![0].replaceAll(',', '')),
-          href: recognizedCounter.getAttribute('href')!,
+          count: Number(recognizedCount.replaceAll(',', '')),
+          href: recognizedHref,
           status: 'ready',
         }
       : counterAnchors.length > 0 || commentLikeWithoutAria
