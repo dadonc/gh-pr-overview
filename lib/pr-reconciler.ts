@@ -4,6 +4,7 @@ import type { PullRequestRowExtraction } from './github-dom';
 import {
   extractPullRequestRows,
   findNativeCommentCounter,
+  findPullRequestIdentity,
   findPullRequestTitle,
 } from './github-dom';
 
@@ -49,8 +50,8 @@ function identityKey(identity: PullRequestRowExtraction['identity']): string {
 }
 
 function canonicalIdentity(row: Element): string | undefined {
-  const title = findPullRequestTitle(row);
-  return title ? identityKey(title.identity) : undefined;
+  const identity = findPullRequestIdentity(row);
+  return identity ? identityKey(identity) : undefined;
 }
 
 function extractionForRow(document: Document, row: HTMLElement): PullRequestRowExtraction | undefined {

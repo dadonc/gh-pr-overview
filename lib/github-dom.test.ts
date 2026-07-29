@@ -188,6 +188,24 @@ describe('extractPullRequestRows', () => {
     });
   });
 
+  it.each([
+    ['off-origin', 'https://evil.example/o/r/pull/4#comments'],
+    ['cross-PR', '/o/r/pull/99#comments'],
+  ])('reports an earlier %s strict counter plus a valid strict counter as ambiguous', (_kind, invalidHref) => {
+    const [row] = extractPullRequestRows(parse(`
+      <div id="issue_4" class="js-issue-row">
+        <a class="Link--primary" href="/o/r/pull/4">A pull request title</a>
+        <a aria-label="99 comments" href="${invalidHref}">99</a>
+        <a aria-label="2 comments" href="/o/r/pull/4#comments">2</a>
+      </div>
+    `));
+
+    expect(row?.nativeComments).toEqual({
+      reason: 'GitHub comment counter is malformed.',
+      status: 'error',
+    });
+  });
+
   it('rejects a separate unlabeled numeric comment counter while preserving the title zero', () => {
     const rows = extractPullRequestRows(parse(`
       <div id="issue_5" class="js-issue-row">

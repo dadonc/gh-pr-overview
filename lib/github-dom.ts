@@ -106,12 +106,10 @@ function canonicalPullIdentity(href: string | null): PullRequestRowExtraction['i
   return { number, owner: match[1]!, repository: match[2]! };
 }
 
-function hasCommentCounterStructure(anchor: HTMLAnchorElement): boolean {
+function hasStrongCommentCounterPlacement(anchor: HTMLAnchorElement): boolean {
   const href = anchor.getAttribute('href') ?? '';
-  const label = anchor.getAttribute('aria-label') ?? '';
   const role = anchor.getAttribute('role') ?? '';
   return (
-    /\bcomments?\b/i.test(label) ||
     /#(?:comments?|issuecomment-)/i.test(href) ||
     /(?:^|\s)(?:comments?-link|comments?-count)(?:\s|$)/i.test(anchor.className) ||
     /comment/i.test(role) ||
@@ -120,6 +118,11 @@ function hasCommentCounterStructure(anchor: HTMLAnchorElement): boolean {
         anchor.querySelector('svg[aria-label*="comment" i], [data-comment-count]'),
     )
   );
+}
+
+function hasCommentCounterStructure(anchor: HTMLAnchorElement): boolean {
+  return hasStrongCommentCounterPlacement(anchor) ||
+    /\bcomments?\b/i.test(anchor.getAttribute('aria-label') ?? '');
 }
 
 function isCommentCounterCandidate(anchor: HTMLAnchorElement): boolean {
@@ -131,43 +134,87 @@ function nativeCommentCountFromLabel(label: string | null): number | undefined {
   const count = label?.match(
     /^\s*(\d{1,3}(?:,\d{3})+|\d+)\s+comments?\s*$/i,
   )?.[1];
-  return count ? Number(count.replaceAll(',', '')) : undefined;
+  if (!count) return undefined;
+  const parsed = Number(count.replaceAll(',', ''));
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function canonicalPullCandidates(row: Element): Array<{
+  anchor: HTMLAnchorElement;
+  identity: PullRequestRowExtraction['identity'];
+}> {
+  return [...row.querySelectorAll<HTMLAnchorElement>('a[href]')].flatMap((anchor) => {
+    const identity = canonicalPullIdentity(anchor.getAttribute('href'));
+    return identity ? [{ anchor, identity }] : [];
+  });
+}
+
+export function findPullRequestIdentity(
+  row: Element,
+): PullRequestRowExtraction['identity'] | undefined {
+  const candidates = canonicalPullCandidates(row);
+  const identities = new Set(candidates.map(({ identity }) =>
+    `${identity.owner.toLowerCase()}/${identity.repository.toLowerCase()}#${identity.number}`,
+  ));
+  return identities.size === 1 ? candidates[0]?.identity : undefined;
 }
 
 export function findPullRequestTitle(row: Element): {
   anchor: HTMLAnchorElement;
   identity: PullRequestRowExtraction['identity'];
 } | undefined {
-  const candidates = [...row.querySelectorAll<HTMLAnchorElement>('a[href]')].flatMap((anchor) => {
-    const identity = canonicalPullIdentity(anchor.getAttribute('href'));
-    return identity ? [{ anchor, identity }] : [];
-  });
+  if (!findPullRequestIdentity(row)) return undefined;
+  const candidates = canonicalPullCandidates(row);
   return candidates.find(({ anchor }) =>
     anchor.matches(
       '.Link--primary, [data-testid="issue-pr-title-link"], [data-testid="pull-request-title-link"], [data-testid="issue-title-link"]',
     ),
-  ) ??
-    candidates.find(({ anchor }) => !isCommentCounterCandidate(anchor)) ??
-    (() => {
-      const structurallyPossibleTitles = candidates.filter(
-        ({ anchor }) => !hasCommentCounterStructure(anchor),
-      );
-      return structurallyPossibleTitles.length === 1
-        ? structurallyPossibleTitles[0]
-        : undefined;
-    })();
+  ) ?? (() => {
+    const structurallyPossibleTitles = candidates.filter(
+      ({ anchor }) => !hasCommentCounterStructure(anchor),
+    );
+    return structurallyPossibleTitles.length === 1
+      ? structurallyPossibleTitles[0]
+      : undefined;
+  })();
+}
+
+interface NativeCommentCounterResolution {
+  counter?: HTMLAnchorElement;
+  isAmbiguous: boolean;
+}
+
+function resolveNativeCommentCounter(
+  row: Element,
+  suppliedTitle?: HTMLAnchorElement,
+): NativeCommentCounterResolution {
+  const title = suppliedTitle ?? findPullRequestTitle(row)?.anchor;
+  const candidates = [...row.querySelectorAll<HTMLAnchorElement>('a')].filter(
+    (anchor) => anchor !== title && !anchor.closest('github-pr-overview'),
+  );
+  const plausibleCounters = candidates.filter(isCommentCounterCandidate);
+
+  if (title) {
+    return plausibleCounters.length === 1
+      ? { counter: plausibleCounters[0], isAmbiguous: false }
+      : { isAmbiguous: plausibleCounters.length > 1 };
+  }
+
+  const strongCounters = plausibleCounters.filter(hasStrongCommentCounterPlacement);
+  if (strongCounters.length === 1) {
+    return { counter: strongCounters[0], isAmbiguous: false };
+  }
+  return {
+    isAmbiguous: plausibleCounters.length > 0 ||
+      canonicalPullCandidates(row).length > 1,
+  };
 }
 
 export function findNativeCommentCounter(
   row: Element,
-  title: HTMLAnchorElement | undefined = findPullRequestTitle(row)?.anchor,
+  title?: HTMLAnchorElement,
 ): HTMLAnchorElement | undefined {
-  const candidates = [...row.querySelectorAll<HTMLAnchorElement>('a')].filter(
-    (anchor) => anchor !== title && !anchor.closest('github-pr-overview'),
-  );
-  return candidates.find((anchor) =>
-    nativeCommentCountFromLabel(anchor.getAttribute('aria-label')) !== undefined,
-  ) ?? candidates.find(isCommentCounterCandidate);
+  return resolveNativeCommentCounter(row, title).counter;
 }
 
 function validatedNativeCounterHref(
@@ -465,11 +512,12 @@ export function extractPullRequestRows(document: Document): PullRequestRowExtrac
   const viewerLogin = document.querySelector('meta[name="user-login"]')?.getAttribute('content')?.trim() || undefined;
 
   return [...document.querySelectorAll<HTMLElement>('[id^="issue_"].js-issue-row')].flatMap((row) => {
-    const title = findPullRequestTitle(row);
-    if (!title) return [];
-    const { anchor: pullLink, identity } = title;
+    const identity = findPullRequestIdentity(row);
+    if (!identity) return [];
+    const pullLink = findPullRequestTitle(row)?.anchor;
 
-    const recognizedCounter = findNativeCommentCounter(row, pullLink);
+    const counterResolution = resolveNativeCommentCounter(row, pullLink);
+    const recognizedCounter = counterResolution.counter;
     const recognizedHref = recognizedCounter?.getAttribute('href');
     const recognizedCount = nativeCommentCountFromLabel(
       recognizedCounter?.getAttribute('aria-label') ?? null,
@@ -483,6 +531,8 @@ export function extractPullRequestRows(document: Document): PullRequestRowExtrac
         }
       : recognizedCounter
         ? { reason: 'GitHub comment counter is malformed.', status: 'error' }
+        : counterResolution.isAmbiguous
+          ? { reason: 'GitHub comment counter is malformed.', status: 'error' }
         : { status: 'zero' };
 
     return [{

@@ -101,6 +101,14 @@ describe('page reconciler', () => {
       'unrelated-number-label',
       '<a aria-label="comments unavailable; retry in 30 seconds" href="/octo/demo/pull/45#comments">many</a>',
     ],
+    [
+      'unsafe-grouped-number',
+      '<a aria-label="9,007,199,254,740,992 comments" href="/octo/demo/pull/45#comments">many</a>',
+    ],
+    [
+      'unsafe-long-number',
+      '<a aria-label="99999999999999999999 comments" href="/octo/demo/pull/45#comments">many</a>',
+    ],
   ])('keeps a comment-count-looking title visible while replacing a %s counter with an error card', async (_kind, counterMarkup) => {
     const document = page(`
       <div id="issue_45" class="js-issue-row">
@@ -172,6 +180,146 @@ describe('page reconciler', () => {
     expect(title.hidden).toBe(false);
     expect(counter.hidden).toBe(true);
   });
+
+  it.each(['counter-first', 'title-first'])(
+    'targets only the structural counter when same-PR title links are ambiguous (%s)',
+    async (order) => {
+      const counter = '<span class="comment-area"><a role="comment" href="/octo/demo/pull/45">many</a></span>';
+      const title = '<a data-probe-title href="/octo/demo/pull/45">12 comments</a>';
+      const ordered = order === 'counter-first' ? `${counter}${title}` : `${title}${counter}`;
+      const document = page(`
+        <div id="issue_45" class="js-issue-row">
+          ${ordered}
+          <a data-extra-link href="/octo/demo/pull/45">Open pull request</a>
+          <span class="opened-by"><a data-hovercard-type="user">octo-author</a></span>
+        </div>
+      `);
+      const titleAnchor = document.querySelector<HTMLAnchorElement>('[data-probe-title]')!;
+      const counterAnchor = document.querySelector<HTMLAnchorElement>('[role="comment"]')!;
+      const extraAnchor = document.querySelector<HTMLAnchorElement>('[data-extra-link]')!;
+      let initial: any;
+      const reconciler = createPageReconciler({
+        document,
+        client: { loadPullRequest: vi.fn(async () => remote) },
+        IntersectionObserver: undefined,
+        uiFactory: {
+          mount(anchor, props) {
+            initial = { anchor, props };
+            return { remove: vi.fn(), update: vi.fn() };
+          },
+        },
+      });
+
+      reconciler.reconcile();
+      await Promise.resolve();
+
+      expect(initial.anchor).toBe(counterAnchor);
+      expect(initial.props.summary.totalComments).toEqual({
+        message: 'GitHub comment counter is malformed.',
+        status: 'error',
+      });
+      expect(titleAnchor.hidden).toBe(false);
+      expect(counterAnchor.hidden).toBe(true);
+      expect(extraAnchor.hidden).toBe(false);
+    },
+  );
+
+  it.each(['number-first', 'title-first'])(
+    'keeps both unmarked same-PR links visible when text alone cannot identify a counter (%s)',
+    async (order) => {
+      const numberLink = '<a data-number-link href="/octo/demo/pull/45">#45</a>';
+      const title = '<a data-probe-title href="/octo/demo/pull/45">12 comments</a>';
+      const ordered = order === 'number-first' ? `${numberLink}${title}` : `${title}${numberLink}`;
+      const document = page(`
+        <div id="issue_45" class="js-issue-row">
+          ${ordered}
+          <span class="opened-by"><a data-hovercard-type="user">octo-author</a></span>
+        </div>
+      `);
+      const titleAnchor = document.querySelector<HTMLAnchorElement>('[data-probe-title]')!;
+      const numberAnchor = document.querySelector<HTMLAnchorElement>('[data-number-link]')!;
+      let initial: any;
+      const reconciler = createPageReconciler({
+        document,
+        client: { loadPullRequest: vi.fn(async () => remote) },
+        IntersectionObserver: undefined,
+        uiFactory: {
+          mount(anchor, props) {
+            initial = { anchor, props };
+            return { remove: vi.fn(), update: vi.fn() };
+          },
+        },
+      });
+
+      reconciler.reconcile();
+      await Promise.resolve();
+
+      expect(initial.anchor).not.toBe(titleAnchor);
+      expect(initial.anchor).not.toBe(numberAnchor);
+      expect(initial.props.summary.totalComments).toEqual({
+        message: 'GitHub comment counter is malformed.',
+        status: 'error',
+      });
+      expect(titleAnchor.hidden).toBe(false);
+      expect(numberAnchor.hidden).toBe(false);
+    },
+  );
+
+  it.each([
+    [
+      'two valid',
+      '<a data-counter-a aria-label="2 comments" href="/octo/demo/pull/45#comments">2</a>',
+      '<a data-counter-b aria-label="3 comments" href="/octo/demo/pull/45#comments">3</a>',
+    ],
+    [
+      'invalid and valid',
+      '<a data-counter-a aria-label="9 comments" href="https://evil.example/octo/demo/pull/45#comments">9</a>',
+      '<a data-counter-b aria-label="3 comments" href="/octo/demo/pull/45#comments">3</a>',
+    ],
+    [
+      'two malformed',
+      '<a data-counter-a role="comment" href="/octo/demo/pull/45">many</a>',
+      '<a data-counter-b class="comments-link" href="/octo/demo/pull/45">many</a>',
+    ],
+  ].flatMap(([kind, first, second]) => [
+    [`${kind}, first order`, first, second],
+    [`${kind}, reverse order`, second, first],
+  ]))(
+    'uses a synthetic error mount for ambiguous counters (%s)',
+    async (_kind, first, second) => {
+      const document = page(`
+        <div id="issue_45" class="js-issue-row">
+          <a class="Link--primary" href="/octo/demo/pull/45">A pull request title</a>
+          <span class="comment-area">${first}${second}</span>
+          <span class="opened-by"><a data-hovercard-type="user">octo-author</a></span>
+        </div>
+      `);
+      const candidates = [...document.querySelectorAll<HTMLAnchorElement>('[data-counter-a], [data-counter-b]')];
+      let initial: any;
+      const reconciler = createPageReconciler({
+        document,
+        client: { loadPullRequest: vi.fn(async () => remote) },
+        IntersectionObserver: undefined,
+        uiFactory: {
+          mount(anchor, props) {
+            initial = { anchor, props };
+            return { remove: vi.fn(), update: vi.fn() };
+          },
+        },
+      });
+
+      reconciler.reconcile();
+      await Promise.resolve();
+
+      expect(candidates).toHaveLength(2);
+      expect(candidates).not.toContain(initial.anchor);
+      expect(initial.props.summary.totalComments).toEqual({
+        message: 'GitHub comment counter is malformed.',
+        status: 'error',
+      });
+      expect(candidates.every((candidate) => candidate.hidden === false)).toBe(true);
+    },
+  );
 
   it.each([
     ['external', 'https://evil.example/octo/demo/pull/43'],
