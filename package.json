@@ -1,8 +1,8 @@
 {
-  "name": "wxt-react-starter",
-  "description": "manifest.json description",
+  "name": "github-pr-overview",
+  "description": "Adds compact comment, review-thread, diff, and AI-agent summaries to GitHub pull request lists.",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -14,6 +14,7 @@
     "compile": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "verify:manifest": "node scripts/verify-manifest.mjs",
     "postinstall": "wxt prepare"
   },
   "dependencies": {

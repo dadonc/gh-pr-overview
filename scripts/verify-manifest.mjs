@@ -1,0 +1,86 @@
+import { readFile } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
+
+const EXPECTED_MATCH = 'https://github.com/*/*/pulls*';
+const EXPECTED_NAME = 'GitHub PR Overview';
+const EXPECTED_ICONS = {
+  16: 'icon/16.png',
+  32: 'icon/32.png',
+  48: 'icon/48.png',
+  96: 'icon/96.png',
+  128: 'icon/128.png',
+};
+const ALLOWED_FIELDS = new Set([
+  'content_scripts',
+  'description',
+  'icons',
+  'manifest_version',
+  'name',
+  'version',
+]);
+
+function equals(value, expected) {
+  return Array.isArray(value)
+    && value.length === expected.length
+    && value.every((item, index) => item === expected[index]);
+}
+
+export function validateManifest(manifest) {
+  const errors = [];
+
+  for (const field of Object.keys(manifest).sort()) {
+    if (!ALLOWED_FIELDS.has(field)) errors.push(`Unexpected manifest field: ${field}`);
+  }
+
+  if (manifest.manifest_version !== 3) errors.push('manifest_version must be 3');
+  if (manifest.name !== EXPECTED_NAME) errors.push(`Manifest name must be ${EXPECTED_NAME}`);
+  if (typeof manifest.description !== 'string' || manifest.description.length < 1 || manifest.description.length > 132) {
+    errors.push('Manifest description must contain 1–132 characters');
+  }
+  if (typeof manifest.version !== 'string' || !/^\d+(?:\.\d+){0,3}$/.test(manifest.version)) {
+    errors.push('Manifest version must use numeric dot notation');
+  }
+  if (
+    !manifest.icons ||
+    !equals(Object.keys(manifest.icons).sort((left, right) => Number(left) - Number(right)), Object.keys(EXPECTED_ICONS)) ||
+    Object.entries(EXPECTED_ICONS).some(([size, path]) => manifest.icons[size] !== path)
+  ) {
+    errors.push('Manifest icons must be the packaged 16, 32, 48, 96, and 128px PNGs');
+  }
+
+  const contentScripts = Array.isArray(manifest.content_scripts) ? manifest.content_scripts : [];
+  if (contentScripts.length !== 1) errors.push('Expected exactly one content script');
+
+  const matches = contentScripts.flatMap((contentScript) => Array.isArray(contentScript?.matches) ? contentScript.matches : []);
+  if (!equals(matches, [EXPECTED_MATCH])) errors.push(`Content script matches must be exactly ${EXPECTED_MATCH}`);
+
+  const contentScript = contentScripts[0];
+  if (contentScript) {
+    if (!equals(contentScript.js, ['content-scripts/content.js'])) {
+      errors.push('Content script must contain only content-scripts/content.js');
+    }
+    if (contentScript.all_frames !== false) errors.push('Content script all_frames must be false');
+    if (contentScript.run_at !== 'document_idle') errors.push('Content script run_at must be document_idle');
+    if (contentScript.world !== 'ISOLATED') errors.push('Content script world must be ISOLATED');
+  }
+
+  return errors;
+}
+
+async function main() {
+  const manifestPath = process.argv[2] ?? '.output/chrome-mv3/manifest.json';
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  const errors = validateManifest(manifest);
+
+  if (errors.length > 0) {
+    process.stderr.write(`${errors.map((error) => `- ${error}`).join('\n')}\n`);
+    process.exitCode = 1;
+    return;
+  }
+
+  process.stdout.write(`Verified minimal MV3 manifest: ${manifestPath}\n`);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}
