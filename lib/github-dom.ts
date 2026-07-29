@@ -106,21 +106,32 @@ function canonicalPullIdentity(href: string | null): PullRequestRowExtraction['i
   return { number, owner: match[1]!, repository: match[2]! };
 }
 
-function isCommentCounterCandidate(anchor: HTMLAnchorElement): boolean {
+function hasCommentCounterStructure(anchor: HTMLAnchorElement): boolean {
   const href = anchor.getAttribute('href') ?? '';
   const label = anchor.getAttribute('aria-label') ?? '';
   const role = anchor.getAttribute('role') ?? '';
   return (
     /\bcomments?\b/i.test(label) ||
     /#(?:comments?|issuecomment-)/i.test(href) ||
-    /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.textContent ?? '') ||
     /(?:^|\s)(?:comments?-link|comments?-count)(?:\s|$)/i.test(anchor.className) ||
     /comment/i.test(role) ||
     Boolean(
-      anchor.closest('[data-comment-count], .js-comments-count, .js-comment-count') ||
+      anchor.closest('.comment-area, [data-comment-count], .js-comments-count, .js-comment-count') ||
         anchor.querySelector('svg[aria-label*="comment" i], [data-comment-count]'),
     )
   );
+}
+
+function isCommentCounterCandidate(anchor: HTMLAnchorElement): boolean {
+  return hasCommentCounterStructure(anchor) ||
+    /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.textContent ?? '');
+}
+
+function nativeCommentCountFromLabel(label: string | null): number | undefined {
+  const count = label?.match(
+    /^\s*(\d{1,3}(?:,\d{3})+|\d+)\s+comments?\s*$/i,
+  )?.[1];
+  return count ? Number(count.replaceAll(',', '')) : undefined;
 }
 
 export function findPullRequestTitle(row: Element): {
@@ -137,7 +148,14 @@ export function findPullRequestTitle(row: Element): {
     ),
   ) ??
     candidates.find(({ anchor }) => !isCommentCounterCandidate(anchor)) ??
-    candidates[0];
+    (() => {
+      const structurallyPossibleTitles = candidates.filter(
+        ({ anchor }) => !hasCommentCounterStructure(anchor),
+      );
+      return structurallyPossibleTitles.length === 1
+        ? structurallyPossibleTitles[0]
+        : undefined;
+    })();
 }
 
 export function findNativeCommentCounter(
@@ -148,7 +166,7 @@ export function findNativeCommentCounter(
     (anchor) => anchor !== title && !anchor.closest('github-pr-overview'),
   );
   return candidates.find((anchor) =>
-    /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.getAttribute('aria-label') ?? ''),
+    nativeCommentCountFromLabel(anchor.getAttribute('aria-label')) !== undefined,
   ) ?? candidates.find(isCommentCounterCandidate);
 }
 
@@ -453,13 +471,13 @@ export function extractPullRequestRows(document: Document): PullRequestRowExtrac
 
     const recognizedCounter = findNativeCommentCounter(row, pullLink);
     const recognizedHref = recognizedCounter?.getAttribute('href');
-    const recognizedCount = recognizedCounter
-      ?.getAttribute('aria-label')
-      ?.match(/[\d,]+/)?.[0];
+    const recognizedCount = nativeCommentCountFromLabel(
+      recognizedCounter?.getAttribute('aria-label') ?? null,
+    );
     const counterHref = validatedNativeCounterHref(recognizedHref ?? null, identity);
-    const nativeComments: NativeCommentCount = recognizedCount && counterHref
+    const nativeComments: NativeCommentCount = recognizedCount !== undefined && counterHref
       ? {
-          count: Number(recognizedCount.replaceAll(',', '')),
+          count: recognizedCount,
           href: counterHref,
           status: 'ready',
         }

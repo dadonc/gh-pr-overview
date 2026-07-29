@@ -97,6 +97,10 @@ describe('page reconciler', () => {
       'nested-icon',
       '<span data-comment-count><a href="/octo/demo/pull/45#not-a-conversation"><svg aria-label="comment"></svg>many</a></span>',
     ],
+    [
+      'unrelated-number-label',
+      '<a aria-label="comments unavailable; retry in 30 seconds" href="/octo/demo/pull/45#comments">many</a>',
+    ],
   ])('keeps a comment-count-looking title visible while replacing a %s counter with an error card', async (_kind, counterMarkup) => {
     const document = page(`
       <div id="issue_45" class="js-issue-row">
@@ -107,6 +111,43 @@ describe('page reconciler', () => {
     `);
     const title = document.querySelector<HTMLAnchorElement>('.Link--primary')!;
     const counter = document.querySelector<HTMLAnchorElement>('.comment-area a')!;
+    let initial: any;
+    const reconciler = createPageReconciler({
+      document,
+      client: { loadPullRequest: vi.fn(async () => remote) },
+      IntersectionObserver: undefined,
+      uiFactory: {
+        mount(anchor, props) {
+          initial = { anchor, props };
+          return { remove: vi.fn(), update: vi.fn() };
+        },
+      },
+    });
+
+    reconciler.reconcile();
+    await Promise.resolve();
+
+    expect(initial.anchor).toBe(counter);
+    expect(initial.props.summary.totalComments).toEqual({
+      message: 'GitHub comment counter is malformed.',
+      status: 'error',
+    });
+    expect(title.hidden).toBe(false);
+    expect(counter.hidden).toBe(true);
+  });
+
+  it('uses counter structure to preserve an unmarked comment-named title when every canonical link is comment-like', async () => {
+    const document = page(`
+      <div id="issue_45" class="js-issue-row">
+        <span class="comment-area">
+          <a role="comment" href="/octo/demo/pull/45">many</a>
+        </span>
+        <a data-probe-title href="/octo/demo/pull/45">12 comments</a>
+        <span class="opened-by"><a data-hovercard-type="user">octo-author</a></span>
+      </div>
+    `);
+    const title = document.querySelector<HTMLAnchorElement>('[data-probe-title]')!;
+    const counter = document.querySelector<HTMLAnchorElement>('[role="comment"]')!;
     let initial: any;
     const reconciler = createPageReconciler({
       document,
