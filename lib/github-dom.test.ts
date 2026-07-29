@@ -160,6 +160,16 @@ describe('extractPullRequestRows', () => {
     expect(row?.nativeComments).toEqual({ status: 'zero' });
   });
 
+  it('does not mistake a canonical pull title aria-label for the native counter', () => {
+    const [row] = extractPullRequestRows(parse(`
+      <div id="issue_4" class="js-issue-row">
+        <a class="Link--primary" href="/o/r/pull/4" aria-label="2 comments">Fix comments parsing</a>
+      </div>
+    `));
+
+    expect(row?.nativeComments).toEqual({ status: 'zero' });
+  });
+
   it('rejects a separate unlabeled numeric comment counter while preserving the title zero', () => {
     const rows = extractPullRequestRows(parse(`
       <div id="issue_5" class="js-issue-row">

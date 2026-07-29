@@ -395,8 +395,10 @@ export function extractPullRequestRows(document: Document): PullRequestRowExtrac
     const identity = canonicalPullIdentity(pullLink?.getAttribute('href') ?? null);
     if (!identity) return [];
 
-    const counterAnchors = [...row.querySelectorAll<HTMLAnchorElement>('a[aria-label]')].filter((anchor) =>
-      /\bcomments?\b/i.test(anchor.getAttribute('aria-label') ?? ''),
+    const counterAnchors = [...row.querySelectorAll<HTMLAnchorElement>('a[aria-label]')].filter(
+      (anchor) =>
+        anchor !== pullLink &&
+        /\bcomments?\b/i.test(anchor.getAttribute('aria-label') ?? ''),
     );
     const recognizedCounter = counterAnchors.find((anchor) =>
       /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.getAttribute('aria-label') ?? ''),
