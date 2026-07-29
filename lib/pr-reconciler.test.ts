@@ -277,6 +277,11 @@ describe('page reconciler', () => {
       '<a data-counter-b aria-label="3 comments" href="/octo/demo/pull/45#comments">3</a>',
     ],
     [
+      'cross-PR empty-fragment and valid',
+      '<a data-counter-a aria-label="9 comments" href="/octo/demo/pull/99">9</a>',
+      '<a data-counter-b aria-label="3 comments" href="/octo/demo/pull/45#comments">3</a>',
+    ],
+    [
       'two malformed',
       '<a data-counter-a role="comment" href="/octo/demo/pull/45">many</a>',
       '<a data-counter-b class="comments-link" href="/octo/demo/pull/45">many</a>',

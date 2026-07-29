@@ -63,6 +63,8 @@ export interface DiffExtraction {
 const GITHUB_ORIGIN = 'https://github.com';
 const threadRootSelector =
   '.js-resolvable-timeline-thread-container, review-thread-collapsible';
+const pullRequestTitleSelector =
+  '.Link--primary, [data-testid="issue-pr-title-link"], [data-testid="pull-request-title-link"], [data-testid="issue-title-link"]';
 
 function documentsFrom(input: Document | readonly Document[]): readonly Document[] {
   return 'querySelector' in input ? [input] : input;
@@ -153,6 +155,17 @@ export function findPullRequestIdentity(
   row: Element,
 ): PullRequestRowExtraction['identity'] | undefined {
   const candidates = canonicalPullCandidates(row);
+  const semanticCandidates = candidates.filter(({ anchor }) =>
+    anchor.matches(pullRequestTitleSelector),
+  );
+  if (semanticCandidates.length > 0) {
+    const semanticIdentities = new Set(semanticCandidates.map(({ identity }) =>
+      `${identity.owner.toLowerCase()}/${identity.repository.toLowerCase()}#${identity.number}`,
+    ));
+    return semanticIdentities.size === 1
+      ? semanticCandidates[0]?.identity
+      : undefined;
+  }
   const identities = new Set(candidates.map(({ identity }) =>
     `${identity.owner.toLowerCase()}/${identity.repository.toLowerCase()}#${identity.number}`,
   ));
@@ -166,9 +179,7 @@ export function findPullRequestTitle(row: Element): {
   if (!findPullRequestIdentity(row)) return undefined;
   const candidates = canonicalPullCandidates(row);
   return candidates.find(({ anchor }) =>
-    anchor.matches(
-      '.Link--primary, [data-testid="issue-pr-title-link"], [data-testid="pull-request-title-link"], [data-testid="issue-title-link"]',
-    ),
+    anchor.matches(pullRequestTitleSelector),
   ) ?? (() => {
     const structurallyPossibleTitles = candidates.filter(
       ({ anchor }) => !hasCommentCounterStructure(anchor),

@@ -191,6 +191,7 @@ describe('extractPullRequestRows', () => {
   it.each([
     ['off-origin', 'https://evil.example/o/r/pull/4#comments'],
     ['cross-PR', '/o/r/pull/99#comments'],
+    ['cross-PR empty-fragment', '/o/r/pull/99'],
   ])('reports an earlier %s strict counter plus a valid strict counter as ambiguous', (_kind, invalidHref) => {
     const [row] = extractPullRequestRows(parse(`
       <div id="issue_4" class="js-issue-row">
