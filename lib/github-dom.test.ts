@@ -74,6 +74,20 @@ describe('extractPullRequestRows', () => {
 
     expect(extractPullRequestRows(document)[0]?.viewerLogin).toBeUndefined();
   });
+
+  it('rejects recognized counters without destinations and comment-like links without aria labels', () => {
+    const rows = extractPullRequestRows(parse(`
+      <div id="issue_1" class="js-issue-row"><a href="/o/r/pull/1">one</a><a aria-label="2 comments">2</a></div>
+      <div id="issue_2" class="js-issue-row"><a href="/o/r/pull/2">two</a><a class="comments-link" href="#comments">comments</a></div>
+      <div id="issue_3" class="js-issue-row"><a href="/o/r/pull/3">three</a></div>
+    `));
+
+    expect(rows.map((row) => row.nativeComments)).toEqual([
+      { reason: 'GitHub comment counter is malformed.', status: 'error' },
+      { reason: 'GitHub comment counter is malformed.', status: 'error' },
+      { status: 'zero' },
+    ]);
+  });
 });
 
 describe('extractTimeline', () => {
@@ -109,6 +123,23 @@ describe('extractTimeline', () => {
       isResolved: true,
     });
     expect(result.threads.find((thread) => thread.id === 'discussion_r102')).toBeUndefined();
+  });
+
+  it.each([
+    ['first-to-last', ['alpha', 'beta', 'bridge']],
+    ['last-to-first', ['bridge', 'beta', 'alpha']],
+  ])('unions records joined late by a thread alias regardless of document order (%s)', (_name, order) => {
+    const documents = {
+      alpha: parse('<turbo-frame id="review-thread-or-comment-id-a"><div class="js-resolvable-timeline-thread-container" data-resolved="false"><input name="pull_request_review_thread_id" value="PRRT_alpha"><a href="/o/r/pull/1/files#discussion_r1">link</a></div></turbo-frame>'),
+      beta: parse('<turbo-frame id="review-thread-or-comment-id-b"><div class="js-resolvable-timeline-thread-container" data-resolved="true"><input name="pull_request_review_thread_id" value="PRRT_beta"><a href="/o/r/pull/1/files#discussion_r2">link</a></div></turbo-frame>'),
+      bridge: parse('<turbo-frame id="review-thread-or-comment-id-c"><div class="js-resolvable-timeline-thread-container" data-resolved="false" data-outdated="true"><input name="pull_request_review_thread_id" value="PRRT_alpha"><a href="/o/r/pull/1/files#discussion_r2">link</a></div></turbo-frame>'),
+    };
+
+    const result = extractTimeline(order.map((key) => documents[key as keyof typeof documents]));
+
+    expect(result.threads).toEqual([
+      { id: 'PRRT_alpha', isOutdated: true, isResolved: true },
+    ]);
   });
 
   it('extracts only recognized AI response artifacts once by type and stable identity', () => {
@@ -167,6 +198,72 @@ describe('extractTimeline', () => {
     ]);
     expect(extractTimeline(document).artifacts.currentReviewRequests).toEqual([]);
   });
+
+  it('keeps structured and legacy review requests in document chronology', () => {
+    const document = parse(`
+      <div id="request-1" data-review-request-action="requested" data-review-requested-login="coderabbitai"></div>
+      <div class="TimelineItem" id="request-2">removed review request for <a data-hovercard-type="user">coderabbitai</a></div>
+      <div id="request-3" data-review-request-action="requested" data-review-requested-login="coderabbitai"></div>
+    `);
+
+    expect(extractTimeline(document).artifacts.reviewRequests).toEqual([
+      { action: 'requested', id: 'request-1', requestedLogin: 'coderabbitai' },
+      { action: 'removed', id: 'request-2', requestedLogin: 'coderabbitai' },
+      { action: 'requested', id: 'request-3', requestedLogin: 'coderabbitai' },
+    ]);
+    expect(extractTimeline(document).artifacts.currentReviewRequests).toEqual([
+      { id: 'request-3', requestedLogin: 'coderabbitai' },
+    ]);
+  });
+
+  it('recognizes a narrowly scoped started-reviewing timeline event', () => {
+    const result = extractTimeline(parse(`
+      <div class="TimelineItem" id="event-started">started reviewing <a data-hovercard-type="user" data-hovercard-url="/apps/gemini-cli/hovercard">Gemini</a></div>
+    `));
+
+    expect(result.artifacts.reviewEvents).toEqual([
+      { action: 'started-reviewing', actorLogin: 'gemini-cli', id: 'event-started' },
+    ]);
+  });
+
+  it('finds semantic header actors without mistaking nested reactions for comment authors', () => {
+    const result = extractTimeline(parse(`
+      <article id="issuecomment-100"><div class="timeline-comment-header"><a data-hovercard-url="/users/gemini-cli[bot]/hovercard"><span>Gemini</span></a></div><div data-reaction-content="eyes" data-reaction-id="r1"><span><a data-hovercard-url="/apps/claude/hovercard">Claude</a></span></div></article>
+      <article id="pullrequestreview-100"><header><a data-hovercard-url="/apps/openai-code-agent/hovercard">Codex</a></header></article>
+      <div class="TimelineItem" id="request-human-first">requested a review from <a data-hovercard-type="user">human-author</a> and <a data-hovercard-url="/apps/coderabbitai/hovercard">CodeRabbit</a></div>
+      <span aria-label="4 eyes reactions">4</span>
+    `));
+
+    expect(result.artifacts.comments).toEqual([{ actorLogin: 'gemini-cli[bot]', id: 'issuecomment-100' }]);
+    expect(result.artifacts.reviews).toEqual([{ actorLogin: 'openai-code-agent', id: 'pullrequestreview-100' }]);
+    expect(result.artifacts.reactions).toEqual([{ actorLogin: 'claude', content: 'eyes', id: 'r1' }]);
+    expect(result.artifacts.reviewRequests).toEqual([
+      { action: 'requested', id: 'request-human-first', requestedLogin: 'coderabbitai' },
+    ]);
+  });
+
+  it('uses typed DOM ids as response identities when a copy also has data-gid', () => {
+    const result = extractTimeline(parse(`
+      <article id="issuecomment-200" data-gid="gid://IssueComment/200"><header><a data-hovercard-url="/apps/gemini-cli/hovercard">Gemini</a></header></article>
+      <article id="issuecomment-200"><header><a data-hovercard-url="/apps/gemini-cli/hovercard">Gemini</a></header></article>
+    `));
+
+    expect(result.artifacts.comments).toEqual([{ actorLogin: 'gemini-cli', id: 'issuecomment-200' }]);
+  });
+
+  it('makes a skipped resolvable thread incomplete while retaining next fragment discovery', () => {
+    const result = extractTimeline(parse(`
+      <div class="js-resolvable-timeline-thread-container" data-resolved="false"><span>no identifier</span></div>
+      <div id="js-timeline-progressive-loader" data-timeline-item-src="/o/r/pull/1/timeline?after=next"></div>
+    `));
+
+    expect(result.threads).toEqual([]);
+    expect(result.completeness).toEqual({
+      isComplete: false,
+      reasons: ['A resolvable review thread had no stable identity.'],
+    });
+    expect(result.nextTimelineFragments).toEqual(['/o/r/pull/1/timeline?after=next']);
+  });
 });
 
 describe('extractDiffSummary', () => {
@@ -184,6 +281,27 @@ describe('extractDiffSummary', () => {
         reasons: ['One or more diff files are collapsed, truncated, or not loaded.'],
       },
       data: { additions: 2, deletions: 1, filesChanged: 2 },
+    });
+  });
+
+  it('does not combine unrelated page labels into exact diff totals', () => {
+    const result = extractDiffSummary(parse(`
+      <aside aria-label="99 files changed"></aside><aside aria-label="500 additions"></aside><aside aria-label="8 deletions"></aside>
+      <div class="js-file file"><a title="src/a.ts">src/a.ts</a><span class="blob-code-addition" data-line-number="1">+a</span></div>
+    `));
+
+    expect(result).toEqual({
+      completeness: { isComplete: true, reasons: [] },
+      data: { additions: 1, deletions: 0, filesChanged: 1 },
+    });
+  });
+
+  it('keeps missing or inaccessible diff evidence incomplete instead of exact zeroes', () => {
+    const result = extractDiffSummary(parse('<div class="flash-error">Access denied</div>'));
+
+    expect(result).toEqual({
+      completeness: { isComplete: false, reasons: ['GitHub did not expose recognizable diff evidence.'] },
+      data: { additions: 0, deletions: 0, filesChanged: 0 },
     });
   });
 });
