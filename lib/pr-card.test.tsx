@@ -77,6 +77,18 @@ describe('PullRequestCard', () => {
     expect(screen.getByText('No AI agents detected yet')).toHaveAttribute('aria-describedby');
   });
 
+  it('visibly marks responded-agent counts as lower bounds when agent data is partial', () => {
+    render(<PullRequestCard summary={{ ...ready,
+      agents: { data: [
+        { agentId: 'codex', responseCount: 3, requestSources: ['formal-review-request'], state: 'responded' },
+      ], reason: 'Some timeline fragments were unavailable.', status: 'partial' },
+    }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
+
+    const chip = screen.getByText('Codex Responded · 3+');
+    expect(chip).toHaveAttribute('aria-describedby');
+    expect(chip).toHaveAttribute('title', expect.stringContaining('Some timeline fragments were unavailable.'));
+  });
+
   it('can transition every section from loading to ready without changing hook order', () => {
     const loading: PullRequestSummary = { ...ready, totalComments: { status: 'loading' }, reviewThreads: { status: 'loading' }, diff: { status: 'loading' }, agents: { status: 'loading' } };
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});

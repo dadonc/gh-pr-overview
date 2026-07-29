@@ -130,6 +130,58 @@ describe('page reconciler', () => {
     expect(raceRemove).toHaveBeenCalledOnce();
   });
 
+  it.each(['synchronous throw', 'asynchronous rejection'] as const)(
+    'retries an unchanged row after a %s only on a later reconciliation',
+    async (failureMode) => {
+      const document = page(row());
+      const native = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+      let attempts = 0;
+      const mount = vi.fn(() => {
+        attempts += 1;
+        if (attempts === 1) {
+          if (failureMode === 'synchronous throw') throw new Error('temporary mount failure');
+          return Promise.reject(new Error('temporary mount failure'));
+        }
+        return { remove: vi.fn(), update: vi.fn() };
+      });
+      const reconciler = createPageReconciler({
+        document,
+        client: { loadPullRequest: vi.fn(async () => remote) },
+        IntersectionObserver: undefined,
+        uiFactory: { mount },
+      });
+
+      reconciler.reconcile();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(mount).toHaveBeenCalledTimes(1);
+      expect(native.hidden).toBe(false);
+
+      reconciler.reconcile();
+      await Promise.resolve();
+      expect(mount).toHaveBeenCalledTimes(2);
+      expect(native.hidden).toBe(true);
+    },
+  );
+
+  it('does not automatically spin when a zero-row mount keeps failing', async () => {
+    const document = page(row(43, ''));
+    const mount = vi.fn(() => { throw new Error('persistent mount failure'); });
+    const reconciler = createPageReconciler({
+      document,
+      client: { loadPullRequest: vi.fn(async () => remote) },
+      IntersectionObserver: undefined,
+      uiFactory: { mount },
+    });
+
+    reconciler.reconcile();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    expect(mount).toHaveBeenCalledTimes(1);
+
+    reconciler.reconcile();
+    expect(mount).toHaveBeenCalledTimes(2);
+  });
+
   it('creates and removes a zero-count anchor and remounts when GitHub replaces it', () => {
     const document = page(row(43, ''));
     const client = { loadPullRequest: vi.fn(async () => remote) };
@@ -139,6 +191,9 @@ describe('page reconciler', () => {
     reconciler.reconcile();
     const extensionAnchor = document.querySelector('[data-pr-overview-zero-anchor]')!;
     expect(extensionAnchor).toBeTruthy();
+    expect(extensionAnchor.tagName).toBe('SPAN');
+    expect(extensionAnchor).not.toHaveAttribute('href');
+    expect((extensionAnchor as HTMLElement).tabIndex).toBe(-1);
     expect(mounted).toEqual([extensionAnchor]);
     extensionAnchor.replaceWith(Object.assign(document.createElement('a'), { href: '/octo/demo/pull/43#comments', ariaLabel: '1 comment' }));
     reconciler.reconcile();

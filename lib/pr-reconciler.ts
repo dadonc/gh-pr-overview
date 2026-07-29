@@ -104,10 +104,10 @@ function setAttributeExactly(element: Element, name: string, value: string | nul
 
 class RowController {
   private abortController?: AbortController;
-  private anchor: HTMLAnchorElement;
+  private anchor: HTMLElement;
   private anchorSnapshot: AttributeSnapshot;
   private currentExtraction: PullRequestRowExtraction;
-  private extensionAnchor?: HTMLAnchorElement;
+  private extensionAnchor?: HTMLSpanElement;
   private mounted?: MountedCard;
   private pendingProps: CardProps;
   private nativeObserver: MutationObserver;
@@ -162,21 +162,20 @@ class RowController {
     }
   }
 
-  private createZeroAnchor(): HTMLAnchorElement {
-    const anchor = this.document.createElement('a');
+  private createZeroAnchor(): HTMLSpanElement {
+    const anchor = this.document.createElement('span');
     anchor.setAttribute('data-pr-overview-zero-anchor', '');
-    anchor.href = `/${this.currentExtraction.identity.owner}/${this.currentExtraction.identity.repository}/pull/${this.currentExtraction.identity.number}`;
     const target = this.row.querySelector('.comment-area, [data-testid="issue-row-end"], .js-issue-meta, .js-issue-row-meta, .opened-by') ?? this.row;
     target.append(anchor);
     this.extensionAnchor = anchor;
     return anchor;
   }
 
-  private snapshot(anchor: HTMLAnchorElement): AttributeSnapshot {
+  private snapshot(anchor: HTMLElement): AttributeSnapshot {
     return { ariaHidden: anchor.getAttribute('aria-hidden'), hidden: anchor.getAttribute('hidden'), style: anchor.getAttribute('style'), tabindex: anchor.getAttribute('tabindex') };
   }
 
-  private hideNative(anchor: HTMLAnchorElement): void {
+  private hideNative(anchor: HTMLElement): void {
     if (anchor !== this.extensionAnchor) {
       anchor.hidden = true;
       anchor.setAttribute('aria-hidden', 'true');
@@ -219,6 +218,7 @@ class RowController {
   }
 
   matches(extraction: PullRequestRowExtraction): boolean {
+    if (this.disposed) return false;
     const nextAnchor = nativeCounter(this.row, extraction);
     return identityKey(extraction.identity) === identityKey(this.currentExtraction.identity) && (nextAnchor ?? this.extensionAnchor) === this.anchor;
   }
@@ -273,7 +273,14 @@ export function createPageReconciler(options: PageReconcilerOptions) {
   const observe = () => {
     if (observer) return;
     observer = new MutationObserver((records) => {
-      if (records.every((record) => record.target.nodeType === 1 && Boolean((record.target as Element).closest('github-pr-overview')))) return;
+      if (records.every((record) => {
+        if (record.target.nodeType === 1 && (record.target as Element).closest('github-pr-overview')) return true;
+        if (record.type !== 'childList') return false;
+        const changedNodes = [...record.addedNodes, ...record.removedNodes];
+        return changedNodes.length > 0 && changedNodes.every((node) =>
+          node.nodeType === 1 && Boolean((node as Element).matches('github-pr-overview, [data-pr-overview-zero-anchor]') || (node as Element).closest('github-pr-overview')),
+        );
+      })) return;
       queueReconcile();
     });
     observer.observe(options.document, {

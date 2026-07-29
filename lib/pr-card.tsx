@@ -26,9 +26,9 @@ function sectionTitle<T>(section: SectionState<T>): string | undefined {
   return section.status === 'error' ? section.message : section.status === 'partial' ? section.reason : undefined;
 }
 
-function agentLabel(agent: AgentParticipation): string {
+function agentLabel(agent: AgentParticipation, lowerBound: boolean): string {
   const name = AI_AGENT_REGISTRY.find((candidate) => candidate.id === agent.agentId)?.label ?? agent.agentId;
-  return agent.state === 'responded' ? `${name} Responded · ${agent.responseCount}` : `${name} Requested`;
+  return agent.state === 'responded' ? `${name} Responded · ${agent.responseCount}${lowerBound ? '+' : ''}` : `${name} Requested`;
 }
 
 function agentTitle(agent: AgentParticipation): string {
@@ -79,7 +79,7 @@ function Agents({ section }: { section: PullRequestSummary['agents'] }) {
   return <>{section.data.map((agent) => {
     const title = `${agentTitle(agent)}${section.status === 'partial' ? ` Partial agent data: ${section.reason}` : ''}`;
     const id = `${descriptionId}-${agent.agentId}`;
-    return <span className="agent" key={agent.agentId} title={title} aria-describedby={id}>{agentLabel(agent)}<Description id={id}>{title}</Description></span>;
+    return <span className="agent" key={agent.agentId} title={title} aria-describedby={id}>{agentLabel(agent, section.status === 'partial')}<Description id={id}>{title}</Description></span>;
   })}</>;
 }
 
