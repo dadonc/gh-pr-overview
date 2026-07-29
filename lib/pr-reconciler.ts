@@ -3,6 +3,8 @@ import type { PullRequestRemoteSummary } from './github-client';
 import type { PullRequestRowExtraction } from './github-dom';
 import { extractPullRequestRows } from './github-dom';
 
+const GITHUB_ORIGIN = 'https://github.com';
+
 export interface PullRequestClient {
   loadPullRequest(identity: PullRequestRowExtraction['identity'], signal?: AbortSignal): Promise<PullRequestRemoteSummary>;
 }
@@ -44,10 +46,38 @@ function identityKey(identity: PullRequestRowExtraction['identity']): string {
   return `${identity.owner.toLowerCase()}/${identity.repository.toLowerCase()}#${identity.number}`;
 }
 
+function trustedGithubUrl(href: string | null): URL | undefined {
+  if (!href) return undefined;
+  const authority = href.trim().match(/^[A-Za-z][A-Za-z\d+.-]*:\/\/([^/?#]*)/)?.[1];
+  const hostAndPort = authority?.split('@').at(-1);
+  const rawPath = href.slice(0, href.search(/[?#]/) === -1 ? href.length : href.search(/[?#]/));
+  if (
+    href.trimStart().startsWith('//') ||
+    hostAndPort?.includes(':') ||
+    /(?:^|\/)\.\.?(?=\/|$)/.test(rawPath) ||
+    /\\|%(?:2f|5c|2e)/i.test(rawPath)
+  ) return undefined;
+
+  try {
+    const url = new URL(href, GITHUB_ORIGIN);
+    return url.protocol === 'https:' && url.origin === GITHUB_ORIGIN && url.port === '' && url.username === '' && url.password === ''
+      ? url
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function canonicalIdentity(row: Element): string | undefined {
   for (const anchor of row.querySelectorAll<HTMLAnchorElement>('a[href]')) {
-    const match = new URL(anchor.href, 'https://github.com').pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)$/);
-    if (match) return `${match[1]!.toLowerCase()}/${match[2]!.toLowerCase()}#${match[3]}`;
+    const url = trustedGithubUrl(anchor.getAttribute('href'));
+    if (!url) continue;
+    if (url.search || url.hash) continue;
+    const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)$/);
+    const number = Number(match?.[3]);
+    if (match && Number.isSafeInteger(number) && number > 0) {
+      return `${match[1]!.toLowerCase()}/${match[2]!.toLowerCase()}#${number}`;
+    }
   }
   return undefined;
 }
@@ -57,19 +87,12 @@ function extractionForRow(document: Document, row: HTMLElement): PullRequestRowE
   return key ? extractPullRequestRows(document).find((candidate) => identityKey(candidate.identity) === key) : undefined;
 }
 
-function isCanonicalPullTitle(anchor: HTMLAnchorElement, extraction: PullRequestRowExtraction): boolean {
-  const url = new URL(anchor.href, 'https://github.com');
-  return url.hash === '' && url.pathname.toLowerCase() === `/${extraction.identity.owner}/${extraction.identity.repository}/pull/${extraction.identity.number}`.toLowerCase();
-}
-
 /** Mirrors the extractor's counter semantics and never mistakes the PR title for a counter. */
 function nativeCounter(row: HTMLElement, extraction: PullRequestRowExtraction): HTMLAnchorElement | undefined {
-  const anchors = [...row.querySelectorAll<HTMLAnchorElement>('a')].filter((anchor) =>
-    !anchor.closest('github-pr-overview') && !isCanonicalPullTitle(anchor, extraction),
-  );
+  if (extraction.nativeComments.status === 'zero') return undefined;
+  const anchors = [...row.querySelectorAll<HTMLAnchorElement>('a')].filter((anchor) => !anchor.closest('github-pr-overview'));
   const ready = anchors.find((anchor) => /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.getAttribute('aria-label') ?? ''));
   if (ready) return ready;
-  if (extraction.nativeComments.status === 'zero') return undefined;
   return anchors.find((anchor) => {
     const label = anchor.getAttribute('aria-label') ?? '';
     return /comments?/i.test(label) || /(?:^|\s)(?:comments?-link|comments?-count)(?:\s|$)/i.test(anchor.className) || /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.textContent ?? '');
@@ -230,16 +253,29 @@ class RowController {
   start(): void {
     if (this.started || this.disposed) return;
     this.started = true;
-    this.abortController = new AbortController();
-    this.client.loadPullRequest(this.currentExtraction.identity, this.abortController.signal).then((remote) => {
-      if (this.disposed || this.ownEpoch !== this.epoch() || this.abortController?.signal.aborted) return;
-      const extraction = extractionForRow(this.document, this.row) ?? this.currentExtraction;
+    const requestedIdentity = this.currentExtraction.identity;
+    const requestedKey = identityKey(requestedIdentity);
+    const abortController = new AbortController();
+    this.abortController = abortController;
+    const matchingExtraction = () => {
+      const extraction = extractionForRow(this.document, this.row);
+      return extraction && identityKey(extraction.identity) === requestedKey && this.matches(extraction)
+        ? extraction
+        : undefined;
+    };
+    this.client.loadPullRequest(requestedIdentity, abortController.signal).then((remote) => {
+      if (this.disposed || this.ownEpoch !== this.epoch() || abortController.signal.aborted) return;
+      const extraction = matchingExtraction();
+      if (!extraction) return;
       this.currentExtraction = extraction;
       this.render(this.props(summaryWithRemote(extraction, remote)));
     }).catch((error: unknown) => {
-      if (this.disposed || this.abortController?.signal.aborted) return;
+      if (this.disposed || this.ownEpoch !== this.epoch() || abortController.signal.aborted) return;
+      const extraction = matchingExtraction();
+      if (!extraction) return;
+      this.currentExtraction = extraction;
       const message = error instanceof Error ? error.message : 'GitHub data could not be loaded.';
-      this.render(this.props({ ...loadingSummary(this.currentExtraction), agents: { message, status: 'error' }, diff: { message, status: 'error' }, reviewThreads: { message, status: 'error' } }));
+      this.render(this.props({ ...loadingSummary(extraction), agents: { message, status: 'error' }, diff: { message, status: 'error' }, reviewThreads: { message, status: 'error' } }));
     });
   }
 

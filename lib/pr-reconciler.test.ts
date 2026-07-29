@@ -76,6 +76,124 @@ describe('page reconciler', () => {
     expect(mountedAt).toBe(counter);
   });
 
+  it.each([
+    ['external', 'https://evil.example/octo/demo/pull/43'],
+    ['explicit-port', 'https://github.com:443/octo/demo/pull/43'],
+    ['query-bearing', '/octo/demo/pull/43?return_to=evil'],
+  ])('ignores %s PR-shaped links when locating a row identity', (_kind, untrustedHref) => {
+    const document = page(row().replace(
+      '<a class="Link--primary"',
+      `<a href="${untrustedHref}">Untrusted PR-shaped link</a><a class="Link--primary"`,
+    ));
+    const client = { loadPullRequest: vi.fn(async (_identity: { number: number }) => remote) };
+    const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));
+    const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount } });
+
+    reconciler.reconcile();
+
+    expect(mount).toHaveBeenCalledOnce();
+    expect(client.loadPullRequest.mock.calls[0]![0].number).toBe(42);
+  });
+
+  it('replaces a valid same-PR numeric counter whose conversation href has an empty fragment', async () => {
+    const document = page(row(42, '<a class="comments-link" aria-label="23 comments" href="/octo/demo/pull/42">23</a>'));
+    const counter = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    let mountedAt: Element | undefined;
+    const reconciler = createPageReconciler({
+      document,
+      client: { loadPullRequest: vi.fn(async () => remote) },
+      IntersectionObserver: undefined,
+      uiFactory: {
+        mount(anchor) {
+          mountedAt = anchor;
+          return { remove: vi.fn(), update: vi.fn() };
+        },
+      },
+    });
+
+    reconciler.reconcile();
+    await Promise.resolve();
+
+    expect(mountedAt).toBe(counter);
+    expect(counter.hidden).toBe(true);
+  });
+
+  it.each([
+    ['explicit default port', 'https://github.com:443/octo/demo/pull/42'],
+    ['query-bearing', '/octo/demo/pull/42?return_to=evil'],
+  ])('replaces a recognized counter with a rejected %s href', async (_kind, unsafeHref) => {
+    const document = page(row(42, `<a class="comments-link" aria-label="23 comments" href="${unsafeHref}">23</a>`));
+    const counter = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    let mountedAt: Element | undefined;
+    let initial: any;
+    const reconciler = createPageReconciler({
+      document,
+      client: { loadPullRequest: vi.fn(async () => remote) },
+      IntersectionObserver: undefined,
+      uiFactory: {
+        mount(anchor, props) {
+          mountedAt = anchor;
+          initial = props;
+          return { remove: vi.fn(), update: vi.fn() };
+        },
+      },
+    });
+
+    reconciler.reconcile();
+    await Promise.resolve();
+
+    expect(mountedAt).toBe(counter);
+    expect(counter.hidden).toBe(true);
+    expect(initial.summary.totalComments).toEqual({ message: 'GitHub comment counter is malformed.', status: 'error' });
+  });
+
+  it('replaces an unsafe PR-shaped native counter instead of mistaking it for the title', async () => {
+    const unsafeCounter = '<a class="comments-link" aria-label="23 comments" href="https://evil.example/octo/demo/pull/42">23</a>';
+    const document = page(row(42, unsafeCounter));
+    const counter = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    let mountedAt: Element | undefined;
+    const reconciler = createPageReconciler({
+      document,
+      client: { loadPullRequest: vi.fn(async () => remote) },
+      IntersectionObserver: undefined,
+      uiFactory: {
+        mount(anchor) {
+          mountedAt = anchor;
+          return { remove: vi.fn(), update: vi.fn() };
+        },
+      },
+    });
+
+    reconciler.reconcile();
+    await Promise.resolve();
+
+    expect(mountedAt).toBe(counter);
+    expect(counter.hidden).toBe(true);
+  });
+
+  it('replaces a native counter with an unparseable href without crashing reconciliation', async () => {
+    const document = page(row(42, '<a class="comments-link" aria-label="many comments" href="http://[">many</a>'));
+    const counter = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    let mountedAt: Element | undefined;
+    const reconciler = createPageReconciler({
+      document,
+      client: { loadPullRequest: vi.fn(async () => remote) },
+      IntersectionObserver: undefined,
+      uiFactory: {
+        mount(anchor) {
+          mountedAt = anchor;
+          return { remove: vi.fn(), update: vi.fn() };
+        },
+      },
+    });
+
+    expect(() => reconciler.reconcile()).not.toThrow();
+    await Promise.resolve();
+
+    expect(mountedAt).toBe(counter);
+    expect(counter.hidden).toBe(true);
+  });
+
   it('hides an aria-labeled malformed counter even when GitHub omitted its href', async () => {
     const document = page(row(46, '<a class="comments-link" aria-label="many comments">many</a>'));
     const malformed = document.querySelector<HTMLAnchorElement>('.comments-link')!;
@@ -263,6 +381,149 @@ describe('page reconciler', () => {
     await vi.waitFor(() => expect(client.loadPullRequest).toHaveBeenCalledTimes(2));
     expect(calls[0]!.aborted).toBe(true);
     expect(updates.some((entry) => entry.summary.totalComments.status === 'error')).toBe(true);
+  });
+
+  it('never adopts a completed summary after its row has been reused for another pull request', async () => {
+    const document = page(row());
+    const remote42: PullRequestRemoteSummary = {
+      ...remote,
+      diff: { data: { additions: 42, deletions: 1, filesChanged: 2 }, status: 'ready' },
+    };
+    const remote43: PullRequestRemoteSummary = {
+      ...remote,
+      diff: { data: { additions: 43, deletions: 1, filesChanged: 2 }, status: 'ready' },
+    };
+    let resolve42!: (value: PullRequestRemoteSummary) => void;
+    const signals: AbortSignal[] = [];
+    const client = {
+      loadPullRequest: vi.fn((identity: { number: number }, signal?: AbortSignal) => {
+        signals.push(signal!);
+        if (identity.number === 42) return new Promise<PullRequestRemoteSummary>((resolve) => { resolve42 = resolve; });
+        return Promise.resolve(remote43);
+      }),
+    };
+    const updates: any[] = [];
+    const removed = vi.fn();
+    const reconciler = createPageReconciler({
+      document,
+      client,
+      IntersectionObserver: undefined,
+      uiFactory: {
+        mount(_anchor, props) {
+          updates.push(props);
+          return { remove: removed, update(next) { updates.push(next); } };
+        },
+      },
+    });
+
+    reconciler.reconcile();
+    const title = document.querySelector<HTMLAnchorElement>('.Link--primary')!;
+    const counter = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    title.setAttribute('href', '/octo/demo/pull/43');
+    counter.setAttribute('href', '/octo/demo/pull/43#issuecomment-43');
+    resolve42(remote42);
+
+    await vi.waitFor(() => expect(client.loadPullRequest).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(updates.some((entry) => entry.conversationHref === '/octo/demo/pull/43' && entry.summary.diff.data?.additions === 43)).toBe(true));
+    expect(client.loadPullRequest.mock.calls.map(([identity]) => identity.number)).toEqual([42, 43]);
+    expect(signals[0]!.aborted).toBe(true);
+    expect(removed).toHaveBeenCalledOnce();
+    expect(updates.some((entry) => entry.conversationHref === '/octo/demo/pull/43' && entry.summary.diff.data?.additions === 42)).toBe(false);
+  });
+
+  it('never renders a rejected request after its row has been reused for another pull request', async () => {
+    class DeferredMutationObserver {
+      static instances: DeferredMutationObserver[] = [];
+      readonly disconnect = vi.fn();
+      readonly observe = vi.fn();
+      readonly takeRecords = vi.fn((): MutationRecord[] => []);
+      constructor(readonly callback: MutationCallback) { DeferredMutationObserver.instances.push(this); }
+      fire(records: MutationRecord[]) { this.callback(records, this as unknown as MutationObserver); }
+    }
+    const NativeMutationObserver = globalThis.MutationObserver;
+    vi.stubGlobal('MutationObserver', DeferredMutationObserver as unknown as typeof MutationObserver);
+    const document = page(row());
+    let reject42!: (reason: Error) => void;
+    const client = {
+      loadPullRequest: vi.fn((identity: { number: number }) => {
+        if (identity.number === 42) return new Promise<PullRequestRemoteSummary>((_resolve, reject) => { reject42 = reject; });
+        return Promise.resolve(remote);
+      }),
+    };
+    const updates: any[] = [];
+    const reconciler = createPageReconciler({
+      document,
+      client,
+      IntersectionObserver: undefined,
+      uiFactory: {
+        mount(_anchor, props) {
+          updates.push(props);
+          return { remove: vi.fn(), update(next) { updates.push(next); } };
+        },
+      },
+    });
+
+    try {
+      reconciler.reconcile();
+      const title = document.querySelector<HTMLAnchorElement>('.Link--primary')!;
+      title.setAttribute('href', '/octo/demo/pull/43');
+      document.querySelector<HTMLAnchorElement>('.comments-link')!.setAttribute('href', '/octo/demo/pull/43#issuecomment-43');
+      reject42(new Error('PR 42 failed'));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(updates.some((entry) => entry.summary.diff.status === 'error')).toBe(false);
+
+      const noNodes = document.createDocumentFragment().childNodes;
+      DeferredMutationObserver.instances[0]!.fire([{
+        addedNodes: noNodes,
+        attributeName: 'href',
+        attributeNamespace: null,
+        nextSibling: null,
+        oldValue: '/octo/demo/pull/42',
+        previousSibling: null,
+        removedNodes: noNodes,
+        target: title,
+        type: 'attributes',
+      }]);
+      await vi.waitFor(() => expect(client.loadPullRequest).toHaveBeenCalledTimes(2));
+      expect(client.loadPullRequest.mock.calls.map(([identity]) => identity.number)).toEqual([42, 43]);
+    } finally {
+      reconciler.cleanup();
+      vi.stubGlobal('MutationObserver', NativeMutationObserver);
+    }
+  });
+
+  it('accepts a pending remote summary after a same-identity native count update', async () => {
+    const document = page(row());
+    let resolve!: (value: PullRequestRemoteSummary) => void;
+    const client = {
+      loadPullRequest: vi.fn(() => new Promise<PullRequestRemoteSummary>((done) => { resolve = done; })),
+    };
+    const updates: any[] = [];
+    const removed = vi.fn();
+    const reconciler = createPageReconciler({
+      document,
+      client,
+      IntersectionObserver: undefined,
+      uiFactory: {
+        mount(_anchor, props) {
+          updates.push(props);
+          return { remove: removed, update(next) { updates.push(next); } };
+        },
+      },
+    });
+
+    reconciler.reconcile();
+    document.querySelector<HTMLAnchorElement>('.comments-link')!.setAttribute('aria-label', '24 comments');
+    resolve(remote);
+
+    await vi.waitFor(() => expect(updates.some((entry) =>
+      entry.summary.reviewThreads.status === 'ready' &&
+      entry.summary.totalComments.data?.count === 24,
+    )).toBe(true));
+    expect(client.loadPullRequest).toHaveBeenCalledOnce();
+    expect(removed).not.toHaveBeenCalled();
   });
 
   it('automatically propagates malformed and repaired native aria labels without an explicit reconciliation call', async () => {
