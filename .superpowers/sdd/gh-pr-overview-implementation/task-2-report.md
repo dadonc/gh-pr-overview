@@ -68,3 +68,9 @@
 - `npm test -- lib/github-dom.test.ts` — **24 tests passed**.
 - `npm test` — **4 test files and 47 tests passed**.
 - `npm run compile` and `git diff --check` exited successfully.
+
+## Final numeric-counter regression
+
+- Kept the canonical pull title excluded while treating a separate non-ARIA link whose complete visible text is a numeric `N comment(s)` counter as malformed.
+- `npm test -- lib/github-dom.test.ts` after adding the separate `12 comments` link produced **1 failure**: it was incorrectly returned as zero.
+- Final verification: focused extractor suite **25 passed**; full suite **48 passed**; `npm run compile` and `git diff --check` succeeded.

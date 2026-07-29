@@ -98,6 +98,20 @@ describe('extractPullRequestRows', () => {
 
     expect(row?.nativeComments).toEqual({ status: 'zero' });
   });
+
+  it('rejects a separate unlabeled numeric comment counter while preserving the title zero', () => {
+    const rows = extractPullRequestRows(parse(`
+      <div id="issue_5" class="js-issue-row">
+        <a class="Link--primary" href="/o/r/pull/5">Fix comments parsing</a>
+        <a href="#discussion">12 comments</a>
+      </div>
+    `));
+
+    expect(rows[0]?.nativeComments).toEqual({
+      reason: 'GitHub comment counter is malformed.',
+      status: 'error',
+    });
+  });
 });
 
 describe('extractTimeline', () => {

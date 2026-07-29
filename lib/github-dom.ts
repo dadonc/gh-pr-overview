@@ -251,6 +251,7 @@ export function extractPullRequestRows(document: Document): PullRequestRowExtrac
       const role = anchor.getAttribute('role') ?? '';
       return (
         /#(?:comments?|issuecomment-)/i.test(href) ||
+        /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.textContent ?? '') ||
         /(?:^|\s)(?:comments?-link|comments?-count)(?:\s|$)/i.test(className) ||
         /comment/i.test(role) ||
         Boolean(
