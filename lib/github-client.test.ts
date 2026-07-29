@@ -46,6 +46,7 @@ describe('GitHub pull-request data pipeline', () => {
     expect(isAllowedPullRequestUrl('https://github.com/octo/demo/pull/42/files', identity, 'files')).toBe(true);
     expect(isAllowedPullRequestUrl('/octo/demo/pull/42/timeline?after=cursor', identity, 'fragment')).toBe(true);
     expect(isAllowedPullRequestUrl('/octo/demo/pull/42/timeline?after_cursor=opaque&source=fragment', identity, 'fragment')).toBe(true);
+    expect(isAllowedPullRequestUrl('/octo/demo/pull/42/timeline?after=abc%2Fdef', identity, 'fragment')).toBe(true);
 
     for (const candidate of [
       'https://api.github.com/repos/octo/demo/pulls/42',
@@ -208,6 +209,20 @@ describe('GitHub pull-request data pipeline', () => {
     const result = await clientFor(fetcher).loadPullRequest(identity);
 
     expect(result.diff.status).toBe('partial');
+    expect(result.reviewThreads).toMatchObject({ data: { total: 1 }, status: 'partial' });
+    expect(result.agents.status).toBe('partial');
+  });
+
+  it('keeps exact diffstat totals ready while hidden file fragments make timeline data partial', async () => {
+    const conversation = '<div id="discussion_bucket"></div><div class="js-resolvable-timeline-thread-container" data-resolved="false"><input name="pull_request_review_thread_id" value="PRRT_one"></div>';
+    const filesWithHiddenReviews = `${diffAggregateHtml}<include-fragment data-fragment-url="/octo/demo/pull/42/files?fragment=hidden"></include-fragment>`;
+    const fetcher = vi.fn(async (url: RequestInfo | URL) =>
+      response(String(url).endsWith('/files') ? filesWithHiddenReviews : conversation, String(url)),
+    );
+
+    const result = await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(result.diff).toMatchObject({ data: { filesChanged: 3 }, status: 'ready' });
     expect(result.reviewThreads).toMatchObject({ data: { total: 1 }, status: 'partial' });
     expect(result.agents.status).toBe('partial');
   });

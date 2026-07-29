@@ -83,6 +83,12 @@ function canonicalUrl(identity: PullRequestIdentity, kind: 'conversation' | 'fil
   return `${GITHUB_ORIGIN}/${identity.owner}/${identity.repository}/pull/${identity.number}${suffix}`;
 }
 
+function rawPathFromCandidate(candidate: string): string {
+  const pathAndAuthority = candidate.slice(0, candidate.search(/[?#]/) === -1 ? candidate.length : candidate.search(/[?#]/));
+  const absolute = pathAndAuthority.match(/^[A-Za-z][A-Za-z\d+.-]*:\/\/[^/]*(\/.*)?$/);
+  return absolute?.[1] ?? pathAndAuthority;
+}
+
 /**
  * Validates every navigation target before it crosses the fetch boundary.
  * Timeline fragments are intentionally the only non-page target allowed.
@@ -94,12 +100,13 @@ export function isAllowedPullRequestUrl(
 ): boolean {
   if (!isValidPullRequestIdentity(identity)) return false;
   // WHATWG URL normalizes backslashes and dot segments. Reject their raw or
-  // encoded spellings so validation never approves a different path than the
-  // one GitHub ultimately receives.
+  // encoded spellings in the *path* so validation never approves a different
+  // path than GitHub receives. Cursor query strings stay opaque.
+  const rawPath = rawPathFromCandidate(candidate);
   if (
     candidate.trimStart().startsWith('//') ||
-    /(?:^|\/)\.\.?(?=\/|[?#]|$)/.test(candidate) ||
-    /\\|%(?:2f|5c|2e)/i.test(candidate)
+    /(?:^|\/)\.\.?(?=\/|$)/.test(rawPath) ||
+    /\\|%(?:2f|5c|2e)/i.test(rawPath)
   ) return false;
 
   let url: URL;
@@ -179,6 +186,12 @@ function sectionFromCompleteness<T>(data: T, isComplete: boolean, reasons: reado
 function hasTimelineEvidence(document: Document): boolean {
   return Boolean(document.querySelector(
     '#discussion_bucket, .js-discussion, [data-testid="issue-viewer-issue-container"], .js-resolvable-timeline-thread-container, review-thread-collapsible, [id^="issuecomment-"], [id^="pullrequestreview-"], [data-review-request-action], [data-review-event], [data-reaction-content="eyes"], #js-timeline-progressive-loader',
+  ));
+}
+
+function filesMayHideTimelineData(document: Document): boolean {
+  return Boolean(document.querySelector(
+    'include-fragment, [data-file-type="collapsed"], [data-file-type="suppressed"], [data-file-type="truncated"], [class*="js-diff-load"], [data-diff-truncated]',
   ));
 }
 
@@ -266,6 +279,9 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
     let fetchFailed = !files.ok;
     if (!hasTimelineEvidence(conversation.document)) incompleteReasons.push('GitHub did not expose recognizable timeline evidence.');
     if (!files.ok) incompleteReasons.push('The files page could not be loaded for inline review data.');
+    if (files.ok && filesMayHideTimelineData(files.document)) {
+      incompleteReasons.push('The files page has unloaded or collapsed content that can hide inline review data.');
+    }
     if (files.ok && diff.status === 'partial') {
       incompleteReasons.push(`The files page is incomplete for inline review data: ${diff.reason}`);
     }
