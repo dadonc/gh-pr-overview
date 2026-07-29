@@ -170,6 +170,24 @@ describe('extractPullRequestRows', () => {
     expect(row?.nativeComments).toEqual({ status: 'zero' });
   });
 
+  it('uses the semantic title when an empty-fragment numeric counter appears first', () => {
+    const [row] = extractPullRequestRows(parse(`
+      <div id="issue_4" class="js-issue-row">
+        <a aria-label="2 comments" href="/o/r/pull/4">2</a>
+        <a class="Link--primary" href="/o/r/pull/4">A pull request title</a>
+      </div>
+    `));
+
+    expect(row).toMatchObject({
+      identity: { number: 4, owner: 'o', repository: 'r' },
+      nativeComments: {
+        count: 2,
+        href: '/o/r/pull/4',
+        status: 'ready',
+      },
+    });
+  });
+
   it('rejects a separate unlabeled numeric comment counter while preserving the title zero', () => {
     const rows = extractPullRequestRows(parse(`
       <div id="issue_5" class="js-issue-row">
@@ -235,6 +253,67 @@ describe('extractTimeline', () => {
     expect(result.threads).toEqual([
       { id: 'PRRT_alpha', isOutdated: true, isResolved: true },
     ]);
+  });
+
+  it('omits an active-looking thread when another copy with the same identity has unreadable state', () => {
+    const result = extractTimeline([
+      parse(`
+        <div class="js-resolvable-timeline-thread-container" data-resolved="false">
+          <input name="pull_request_review_thread_id" value="PRRT_shared">
+        </div>
+      `),
+      parse(`
+        <review-thread-collapsible data-review-thread-id="PRRT_shared" data-resolved="unknown">
+        </review-thread-collapsible>
+      `),
+    ]);
+
+    expect(result.threads).toEqual([]);
+    expect(classifyReviewThreads(result.threads)).toEqual({
+      resolvedOrOutdated: 0,
+      total: 0,
+      unresolved: 0,
+    });
+    expect(result.completeness).toEqual({
+      isComplete: false,
+      reasons: ['A resolvable review thread had unreadable resolution or outdated state.'],
+    });
+  });
+
+  it('uses an unreadable alias bridge to count one proven non-active logical thread', () => {
+    const result = extractTimeline([
+      parse(`
+        <div class="js-resolvable-timeline-thread-container" data-resolved="false">
+          <input name="pull_request_review_thread_id" value="PRRT_alpha">
+          <a href="/o/r/pull/1/files#discussion_r1">link</a>
+        </div>
+      `),
+      parse(`
+        <div class="js-resolvable-timeline-thread-container" data-resolved="true">
+          <input name="pull_request_review_thread_id" value="PRRT_beta">
+          <a href="/o/r/pull/1/files#discussion_r2">link</a>
+        </div>
+      `),
+      parse(`
+        <review-thread-collapsible data-resolved="unknown" data-outdated="unknown">
+          <input name="pull_request_review_thread_id" value="PRRT_alpha">
+          <a href="/o/r/pull/1/files#discussion_r2">link</a>
+        </review-thread-collapsible>
+      `),
+    ]);
+
+    expect(result.threads).toEqual([
+      { id: 'PRRT_alpha', isOutdated: false, isResolved: true },
+    ]);
+    expect(classifyReviewThreads(result.threads)).toEqual({
+      resolvedOrOutdated: 1,
+      total: 1,
+      unresolved: 0,
+    });
+    expect(result.completeness).toEqual({
+      isComplete: false,
+      reasons: ['A resolvable review thread had unreadable resolution or outdated state.'],
+    });
   });
 
   it('extracts only recognized AI response artifacts once by type and stable identity', () => {

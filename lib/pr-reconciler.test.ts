@@ -77,6 +77,50 @@ describe('page reconciler', () => {
   });
 
   it.each([
+    [
+      'malformed',
+      '<a class="comments-link" aria-label="many comments" href="http://[">many</a>',
+    ],
+    [
+      'off-origin',
+      '<a class="comments-link" href="https://evil.example/octo/demo/pull/45">many</a>',
+    ],
+  ])('keeps a comment-count-looking title visible while replacing a %s counter with an error card', async (_kind, counterMarkup) => {
+    const document = page(`
+      <div id="issue_45" class="js-issue-row">
+        <a class="Link--primary" aria-label="12 comments" href="/octo/demo/pull/45">12 comments</a>
+        <span class="opened-by"><a data-hovercard-type="user">octo-author</a></span>
+        <span class="comment-area">${counterMarkup}</span>
+      </div>
+    `);
+    const title = document.querySelector<HTMLAnchorElement>('.Link--primary')!;
+    const counter = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    let initial: any;
+    const reconciler = createPageReconciler({
+      document,
+      client: { loadPullRequest: vi.fn(async () => remote) },
+      IntersectionObserver: undefined,
+      uiFactory: {
+        mount(anchor, props) {
+          initial = { anchor, props };
+          return { remove: vi.fn(), update: vi.fn() };
+        },
+      },
+    });
+
+    reconciler.reconcile();
+    await Promise.resolve();
+
+    expect(initial.anchor).toBe(counter);
+    expect(initial.props.summary.totalComments).toEqual({
+      message: 'GitHub comment counter is malformed.',
+      status: 'error',
+    });
+    expect(title.hidden).toBe(false);
+    expect(counter.hidden).toBe(true);
+  });
+
+  it.each([
     ['external', 'https://evil.example/octo/demo/pull/43'],
     ['explicit-port', 'https://github.com:443/octo/demo/pull/43'],
     ['query-bearing', '/octo/demo/pull/43?return_to=evil'],

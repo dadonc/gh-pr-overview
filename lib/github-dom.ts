@@ -106,6 +106,40 @@ function canonicalPullIdentity(href: string | null): PullRequestRowExtraction['i
   return { number, owner: match[1]!, repository: match[2]! };
 }
 
+function isCommentCounterCandidate(anchor: HTMLAnchorElement): boolean {
+  const href = anchor.getAttribute('href') ?? '';
+  const label = anchor.getAttribute('aria-label') ?? '';
+  const role = anchor.getAttribute('role') ?? '';
+  return (
+    /\bcomments?\b/i.test(label) ||
+    /#(?:comments?|issuecomment-)/i.test(href) ||
+    /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.textContent ?? '') ||
+    /(?:^|\s)(?:comments?-link|comments?-count)(?:\s|$)/i.test(anchor.className) ||
+    /comment/i.test(role) ||
+    Boolean(
+      anchor.closest('[data-comment-count], .js-comments-count, .js-comment-count') ||
+        anchor.querySelector('svg[aria-label*="comment" i], [data-comment-count]'),
+    )
+  );
+}
+
+export function findPullRequestTitle(row: Element): {
+  anchor: HTMLAnchorElement;
+  identity: PullRequestRowExtraction['identity'];
+} | undefined {
+  const candidates = [...row.querySelectorAll<HTMLAnchorElement>('a[href]')].flatMap((anchor) => {
+    const identity = canonicalPullIdentity(anchor.getAttribute('href'));
+    return identity ? [{ anchor, identity }] : [];
+  });
+  return candidates.find(({ anchor }) =>
+    anchor.matches(
+      '.Link--primary, [data-testid="issue-pr-title-link"], [data-testid="pull-request-title-link"], [data-testid="issue-title-link"]',
+    ),
+  ) ??
+    candidates.find(({ anchor }) => !isCommentCounterCandidate(anchor)) ??
+    candidates[0];
+}
+
 function validatedNativeCounterHref(
   href: string | null,
   identity: PullRequestRowExtraction['identity'],
@@ -219,8 +253,8 @@ function threadIdentities(root: Element): string[] {
 
 interface ThreadCandidate {
   identities: readonly string[];
-  isOutdated: boolean;
-  isResolved: boolean;
+  outdated: ParsedThreadState;
+  resolved: ParsedThreadState;
 }
 
 interface AliasedCandidate {
@@ -266,18 +300,30 @@ function groupAliasedCandidates<T extends AliasedCandidate>(
 }
 
 function mergeThreadCandidates(candidates: readonly ThreadCandidate[]): ReviewThread[] {
-  return groupAliasedCandidates(candidates).map((group) => {
+  return groupAliasedCandidates(candidates).flatMap((group) => {
+    const isOutdated = group.some((candidate) =>
+      candidate.outdated.isReadable && candidate.outdated.value,
+    );
+    const isResolved = group.some((candidate) =>
+      candidate.resolved.isReadable && candidate.resolved.value,
+    );
+    const isActive = group.every((candidate) =>
+      candidate.outdated.isReadable && !candidate.outdated.value &&
+      candidate.resolved.isReadable && !candidate.resolved.value,
+    );
+    if (!isOutdated && !isResolved && !isActive) return [];
+
     const identities = [...new Set(group.flatMap((candidate) => candidate.identities))];
     const id = identities.sort((left, right) => {
       const leftDiscussion = left.startsWith('discussion_');
       const rightDiscussion = right.startsWith('discussion_');
       return Number(leftDiscussion) - Number(rightDiscussion) || left.localeCompare(right);
     })[0]!;
-    return {
+    return [{
       id,
-      isOutdated: group.some((candidate) => candidate.isOutdated),
-      isResolved: group.some((candidate) => candidate.isResolved),
-    };
+      isOutdated,
+      isResolved,
+    }];
   });
 }
 
@@ -389,11 +435,9 @@ export function extractPullRequestRows(document: Document): PullRequestRowExtrac
   const viewerLogin = document.querySelector('meta[name="user-login"]')?.getAttribute('content')?.trim() || undefined;
 
   return [...document.querySelectorAll<HTMLElement>('[id^="issue_"].js-issue-row')].flatMap((row) => {
-    const pullLink = [...row.querySelectorAll<HTMLAnchorElement>('a[href]')].find((anchor) =>
-      canonicalPullIdentity(anchor.getAttribute('href')),
-    );
-    const identity = canonicalPullIdentity(pullLink?.getAttribute('href') ?? null);
-    if (!identity) return [];
+    const title = findPullRequestTitle(row);
+    if (!title) return [];
+    const { anchor: pullLink, identity } = title;
 
     const counterAnchors = [...row.querySelectorAll<HTMLAnchorElement>('a[aria-label]')].filter(
       (anchor) =>
@@ -403,22 +447,8 @@ export function extractPullRequestRows(document: Document): PullRequestRowExtrac
     const recognizedCounter = counterAnchors.find((anchor) =>
       /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.getAttribute('aria-label') ?? ''),
     );
-    const commentLikeWithoutAria = [...row.querySelectorAll<HTMLAnchorElement>('a:not([aria-label])')].some((anchor) => {
-      if (anchor === pullLink) return false;
-      const href = anchor.getAttribute('href') ?? '';
-      const className = anchor.className;
-      const role = anchor.getAttribute('role') ?? '';
-      return (
-        /#(?:comments?|issuecomment-)/i.test(href) ||
-        /^\s*[\d,]+\s+comments?\s*$/i.test(anchor.textContent ?? '') ||
-        /(?:^|\s)(?:comments?-link|comments?-count)(?:\s|$)/i.test(className) ||
-        /comment/i.test(role) ||
-        Boolean(
-          anchor.closest('[data-comment-count], .js-comments-count, .js-comment-count') ||
-            anchor.querySelector('svg[aria-label*="comment" i], [data-comment-count]'),
-        )
-      );
-    });
+    const hasOtherCommentCandidate = [...row.querySelectorAll<HTMLAnchorElement>('a')]
+      .some((anchor) => anchor !== pullLink && isCommentCounterCandidate(anchor));
     const recognizedHref = recognizedCounter?.getAttribute('href');
     const recognizedCount = recognizedCounter
       ?.getAttribute('aria-label')
@@ -430,7 +460,7 @@ export function extractPullRequestRows(document: Document): PullRequestRowExtrac
           href: counterHref,
           status: 'ready',
         }
-      : counterAnchors.length > 0 || commentLikeWithoutAria
+      : hasOtherCommentCandidate
         ? { reason: 'GitHub comment counter is malformed.', status: 'error' }
         : { status: 'zero' };
 
@@ -492,16 +522,8 @@ export function extractTimeline(input: Document | readonly Document[]): Timeline
       if (identities.length === 0) {
         incompleteReasons.add('A resolvable review thread had no stable identity.');
       } else {
-        const isKnownNonActive = resolved.value || outdated.value;
-        const isKnownActive = resolved.isReadable && !resolved.value &&
-          outdated.isReadable && !outdated.value;
-        if (isKnownNonActive || isKnownActive) {
-          threadCandidates.push({
-            identities,
-            isOutdated: outdated.value,
-            isResolved: resolved.value,
-          });
-        } else {
+        threadCandidates.push({ identities, outdated, resolved });
+        if (!resolved.isReadable || !outdated.isReadable) {
           incompleteReasons.add('A resolvable review thread had unreadable resolution or outdated state.');
         }
       }
