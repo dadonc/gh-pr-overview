@@ -83,7 +83,7 @@ export const test = base.extend<{ extension: ExtensionHarness }>({
     const pendingRoutes = new Map<symbol, string>();
     let activity = 0;
     const noteActivity = () => { activity += 1; };
-    const extensionPath = path.resolve('.output/chrome-mv3');
+    const extensionPath = path.resolve('output/chrome-mv3');
     const context = await chromium.launchPersistentContext('', {
       channel: 'chromium',
       headless: true,

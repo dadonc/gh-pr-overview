@@ -217,7 +217,7 @@ async function readBundleFiles(records) {
   return { contentScript, errors, files, sizes };
 }
 
-export async function verifyBundle(bundlePath = '.output/chrome-mv3') {
+export async function verifyBundle(bundlePath = 'output/chrome-mv3') {
   try {
     const scan = await scanBundle(bundlePath);
     const bundle = await readBundleFiles(scan.records);
@@ -238,7 +238,7 @@ export async function verifyBundle(bundlePath = '.output/chrome-mv3') {
 }
 
 async function main() {
-  await verifyBundle(process.argv[2] ?? '.output/chrome-mv3');
+  await verifyBundle(process.argv[2] ?? 'output/chrome-mv3');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

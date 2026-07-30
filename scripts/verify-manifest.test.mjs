@@ -1,6 +1,7 @@
+import { spawnSync } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -162,5 +163,19 @@ describe('validateManifest', () => {
 
     expect(process.exitCode).toBeUndefined();
     expect(stdout).toHaveBeenCalledWith(`Verified minimal MV3 manifest: ${manifestPath}\n`);
+  });
+
+  it('uses the generated WXT Chrome manifest by default', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'verify-manifest-default-'));
+    temporaryDirectories.push(directory);
+
+    const result = spawnSync(process.execPath, [resolve('scripts/verify-manifest.mjs')], {
+      cwd: directory,
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain('.output/chrome-mv3/manifest.json');
+    expect(result.stderr).toContain('output/chrome-mv3/manifest.json');
   });
 });

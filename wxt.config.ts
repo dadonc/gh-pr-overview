@@ -6,4 +6,5 @@ export default defineConfig({
     name: 'GitHub PR Overview',
   },
   modules: ['@wxt-dev/module-react'],
+  outDir: 'output',
 });

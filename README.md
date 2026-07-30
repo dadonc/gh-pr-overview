@@ -78,7 +78,7 @@ npm run verify:manifest
 ```
 
 `npm run build` creates the unpacked Chrome Manifest V3 extension in
-`.output/chrome-mv3`. The manifest verifier checks that the build contains only
+`output/chrome-mv3`. The manifest verifier checks that the build contains only
 the path-scoped GitHub content script and does not add a background worker,
 toolbar action, extension permissions, host permissions, or web-accessible
 resources.
@@ -92,7 +92,7 @@ output.
 2. Open `chrome://extensions` in Chrome.
 3. Enable **Developer mode**.
 4. Select **Load unpacked**.
-5. Choose this repository's `.output/chrome-mv3` directory.
+5. Choose this repository's `output/chrome-mv3` directory.
 6. Open a repository pull-request list while signed in to GitHub.
 
 After rebuilding, use the extension's reload button on `chrome://extensions`

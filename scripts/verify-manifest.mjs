@@ -97,7 +97,7 @@ export function validateManifest(manifest) {
   return errors;
 }
 
-export async function verifyManifest(manifestPath = '.output/chrome-mv3/manifest.json') {
+export async function verifyManifest(manifestPath = 'output/chrome-mv3/manifest.json') {
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   const errors = validateManifest(manifest);
 
@@ -111,7 +111,7 @@ export async function verifyManifest(manifestPath = '.output/chrome-mv3/manifest
 }
 
 async function main() {
-  await verifyManifest(process.argv[2] ?? '.output/chrome-mv3/manifest.json');
+  await verifyManifest(process.argv[2] ?? 'output/chrome-mv3/manifest.json');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

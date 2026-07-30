@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -227,13 +227,26 @@ describe('validateBundle', () => {
   });
 
   it('reports an actionable filesystem error from the CLI', () => {
-    const result = spawnSync(process.execPath, ['scripts/verify-bundle.mjs', '.output/missing-bundle'], {
+    const result = spawnSync(process.execPath, ['scripts/verify-bundle.mjs', 'output/missing-bundle'], {
       cwd: process.cwd(),
       encoding: 'utf8',
     });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Failed to verify Chrome bundle at .output/missing-bundle:');
+    expect(result.stderr).toContain('Failed to verify Chrome bundle at output/missing-bundle:');
+  });
+
+  it('uses the generated WXT Chrome directory by default', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'verify-bundle-default-'));
+    temporaryBundles.push(directory);
+
+    const result = spawnSync(process.execPath, [resolve('scripts/verify-bundle.mjs')], {
+      cwd: directory,
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Failed to verify Chrome bundle at output/chrome-mv3:');
   });
 
   it('verifies a complete bundle through the in-process CLI path', async () => {
@@ -249,11 +262,11 @@ describe('validateBundle', () => {
   it('reports an invalid bundle through the in-process CLI path', async () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 
-    await verifyBundle('.output/missing-bundle');
+    await verifyBundle('output/missing-bundle');
 
     expect(process.exitCode).toBe(1);
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining(
-      'Failed to verify Chrome bundle at .output/missing-bundle:',
+      'Failed to verify Chrome bundle at output/missing-bundle:',
     ));
   });
 
