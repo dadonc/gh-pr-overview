@@ -6,17 +6,20 @@ import {
   type ReviewThreadCounts,
   type SectionState,
 } from './domain';
+import type { PullRequestIdentity } from './domain';
 import { extractDiffSummary, extractTimeline } from './github-dom';
+import {
+  GITHUB_ORIGIN,
+  isValidPullRequestIdentity,
+  pullRequestPath,
+  trustedGitHubUrl,
+} from './github-url';
 
-const GITHUB_ORIGIN = 'https://github.com';
 const CACHE_TTL_MS = 60_000;
 const MAX_TIMELINE_FRAGMENTS = 20;
 
-export interface PullRequestIdentity {
-  number: number;
-  owner: string;
-  repository: string;
-}
+export type { PullRequestIdentity } from './domain';
+export { isValidPullRequestIdentity } from './github-url';
 
 /** Remote data only. Native comment totals stay on their live PR-list row. */
 export interface PullRequestRemoteSummary {
@@ -68,25 +71,9 @@ function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-function validSegment(value: string): boolean {
-  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
-}
-
-export function isValidPullRequestIdentity(identity: PullRequestIdentity): boolean {
-  return validSegment(identity.owner) &&
-    validSegment(identity.repository) &&
-    Number.isSafeInteger(identity.number) && identity.number > 0;
-}
-
 function canonicalUrl(identity: PullRequestIdentity, kind: 'conversation' | 'files'): string {
   const suffix = kind === 'files' ? '/files' : '';
-  return `${GITHUB_ORIGIN}/${identity.owner}/${identity.repository}/pull/${identity.number}${suffix}`;
-}
-
-function rawPathFromCandidate(candidate: string): string {
-  const pathAndAuthority = candidate.slice(0, candidate.search(/[?#]/) === -1 ? candidate.length : candidate.search(/[?#]/));
-  const absolute = pathAndAuthority.match(/^[A-Za-z][A-Za-z\d+.-]*:\/\/[^/]*(\/.*)?$/);
-  return absolute?.[1] ?? pathAndAuthority;
+  return `${GITHUB_ORIGIN}${pullRequestPath(identity)}${suffix}`;
 }
 
 /**
@@ -99,31 +86,10 @@ export function isAllowedPullRequestUrl(
   kind: PullRequestUrlKind,
 ): boolean {
   if (!isValidPullRequestIdentity(identity)) return false;
-  // WHATWG URL normalizes backslashes and dot segments. Reject their raw or
-  // encoded spellings in the *path* so validation never approves a different
-  // path than GitHub receives. Cursor query strings stay opaque.
-  const rawPath = rawPathFromCandidate(candidate);
-  if (
-    candidate.trimStart().startsWith('//') ||
-    /(?:^|\/)\.\.?(?=\/|$)/.test(rawPath) ||
-    /\\|%(?:2f|5c|2e)/i.test(rawPath)
-  ) return false;
+  const url = trustedGitHubUrl(candidate);
+  if (!url) return false;
 
-  let url: URL;
-  try {
-    url = new URL(candidate, GITHUB_ORIGIN);
-  } catch {
-    return false;
-  }
-  if (
-    url.protocol !== 'https:' ||
-    url.origin !== GITHUB_ORIGIN ||
-    url.port ||
-    url.username ||
-    url.password
-  ) return false;
-
-  const base = `/${identity.owner}/${identity.repository}/pull/${identity.number}`;
+  const base = pullRequestPath(identity);
   const sameConversationPath = url.pathname.toLowerCase() === base.toLowerCase();
   if (kind === 'conversation') return sameConversationPath && !url.search && !url.hash;
   if (kind === 'files') return url.pathname.toLowerCase() === `${base}/files`.toLowerCase() && !url.search && !url.hash;

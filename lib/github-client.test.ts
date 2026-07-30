@@ -6,6 +6,7 @@ import timelineHtml from '../test/fixtures/github/timeline.html?raw';
 import {
   createFetchLimiter,
   createGitHubClient,
+  isValidPullRequestIdentity,
   isAllowedPullRequestUrl,
 } from './github-client';
 
@@ -41,6 +42,19 @@ function clientFor(
 }
 
 describe('GitHub pull-request data pipeline', () => {
+  it('accepts valid leading-dot repository names without weakening owner validation', () => {
+    expect(isValidPullRequestIdentity({
+      number: 1,
+      owner: 'github',
+      repository: '.github',
+    })).toBe(true);
+    expect(isValidPullRequestIdentity({
+      number: 1,
+      owner: '.github',
+      repository: 'community',
+    })).toBe(false);
+  });
+
   it('accepts only canonical same-PR GitHub conversation, files, and timeline URLs', () => {
     expect(isAllowedPullRequestUrl('/octo/demo/pull/42', identity, 'conversation')).toBe(true);
     expect(isAllowedPullRequestUrl('https://github.com/octo/demo/pull/42/files', identity, 'files')).toBe(true);

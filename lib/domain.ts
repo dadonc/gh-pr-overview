@@ -70,6 +70,12 @@ export interface DiffSummary {
   filesChanged: number;
 }
 
+export interface PullRequestIdentity {
+  number: number;
+  owner: string;
+  repository: string;
+}
+
 export interface PullRequestSummary {
   agents: SectionState<readonly AgentParticipation[]>;
   authoredByViewer: boolean;

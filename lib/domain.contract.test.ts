@@ -2,12 +2,23 @@ import { describe, expect, it } from 'vitest';
 
 import type {
   AgentParticipation,
+  PullRequestIdentity,
   PullRequestSummary,
   SectionState,
   TotalComments,
 } from './domain';
 
 describe('domain data contracts', () => {
+  it('shares a pull-request identity contract', () => {
+    const identity: PullRequestIdentity = {
+      number: 42,
+      owner: 'octo',
+      repository: '.github',
+    };
+
+    expect(identity.repository).toBe('.github');
+  });
+
   it('supports each approved SectionState and PR summary shape', () => {
     const loading: SectionState<TotalComments> = { status: 'loading' };
     const ready: SectionState<TotalComments> = {

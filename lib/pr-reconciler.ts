@@ -1,4 +1,5 @@
 import type { PullRequestSummary, SectionState, TotalComments } from './domain';
+import type { PullRequestIdentity } from './domain';
 import type { PullRequestRemoteSummary } from './github-client';
 import type { PullRequestRowExtraction } from './github-dom';
 import {
@@ -9,7 +10,7 @@ import {
 } from './github-dom';
 
 export interface PullRequestClient {
-  loadPullRequest(identity: PullRequestRowExtraction['identity'], signal?: AbortSignal): Promise<PullRequestRemoteSummary>;
+  loadPullRequest(identity: PullRequestIdentity, signal?: AbortSignal): Promise<PullRequestRemoteSummary>;
 }
 
 export interface CardProps {
@@ -45,7 +46,7 @@ interface AttributeSnapshot {
   style: string | null;
 }
 
-function identityKey(identity: PullRequestRowExtraction['identity']): string {
+function identityKey(identity: PullRequestIdentity): string {
   return `${identity.owner.toLowerCase()}/${identity.repository.toLowerCase()}#${identity.number}`;
 }
 
