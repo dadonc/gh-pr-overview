@@ -330,9 +330,15 @@ run-time checks remain.
 A bundle verifier will check:
 
 - The exact expected packaged file set.
-- No generated reference to `content-scripts/content.css`.
+- No packaged CSS asset or manifest CSS entry.
 - Content-script size at or below 250,000 bytes.
 - Total unpacked size at or below 270,000 bytes.
+
+WXT's generic shadow-root helper may retain a dormant
+`content-scripts/content.css` loader string even when the entrypoint does not
+enable that branch. The entrypoint integration test must prove the option is
+absent and direct `CARD_STYLES` injection is present; the Chromium smoke must
+abort and fail on any actual CSS request.
 
 These budgets are modest regression guards around the existing React-based
 bundle, not a mandate to remove React.
@@ -417,8 +423,8 @@ repository data must not be committed.
 - Reconciliation is linear per document pass and counter transitions do not
   restart remote work.
 - Navigation never clears and remounts against an uncommitted URL.
-- The generated extension contains no phantom CSS request or unexpected
-  manifest/package field.
+- The generated extension makes no phantom CSS request and contains no
+  unexpected manifest/package field.
 - Unit, integration, type, build, manifest, bundle, coverage, and Chromium
   checks pass locally.
 - The remaining signed-in Chrome check is documented explicitly rather than

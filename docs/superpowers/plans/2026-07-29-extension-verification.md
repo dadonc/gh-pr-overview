@@ -176,8 +176,10 @@ Define the exact allowed files:
 ]
 ```
 
-Test extra/missing files, a content script over 250,000 bytes, total size over
-270,000 bytes, and source containing `content-scripts/content.css`.
+Test extra/missing files, a content script over 250,000 bytes, and total size
+over 270,000 bytes. The exact file allowlist already rejects a packaged CSS
+asset. Do not reject WXT's dormant generic loader string; executable CSS-request
+behavior is gated by the entrypoint integration and Chromium network tests.
 
 - [ ] **Step 5: Implement and wire the bundle verifier**
 
@@ -204,7 +206,8 @@ npm run verify:manifest
 npm run verify:bundle
 ```
 
-Expected: PASS; no CSS reference and both budgets remain within limits.
+Expected: PASS; the exact package contains no CSS asset and both budgets remain
+within limits.
 
 - [ ] **Step 7: Commit package verification**
 
@@ -295,6 +298,9 @@ Mock `createShadowRootUi` with a fake that:
 - Appends one container.
 - Calls the real `onMount(container)` and stores its returned React root.
 - Implements `mount`, `remove`, and `mounted`.
+
+Capture its options and assert `css` is the direct card stylesheet while
+`cssInjectionMode` is absent.
 
 Stub `fetch` by exact URL to return the current conversation, files, and
 focused-fragment fixtures with `content-type: text/html`.
@@ -437,7 +443,8 @@ Add hostile page CSS:
 
 Assert a shadow `.metric` does not inherit the 40 px size and that
 `CARD_STYLES` exists in the shadow root. Assert no collected errors or
-unexpected requests.
+unexpected requests, including no request for
+`/content-scripts/content.css`.
 
 - [ ] **Step 4: Write the lifecycle smoke**
 
