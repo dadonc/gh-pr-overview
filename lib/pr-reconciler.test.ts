@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import currentPrListHtml from '../test/fixtures/github/current/pr-list.html?raw';
 import type { PullRequestRemoteSummary } from './github-client';
 import { createPageReconciler, isPullRequestListRoute, type ObserverConstructor } from './pr-reconciler';
 
@@ -20,6 +21,19 @@ function row(number = 42, counter = '<a class="comments-link" aria-label="23 com
   return `<div id="issue_${number}" class="js-issue-row"><a class="Link--primary" href="/octo/demo/pull/${number}">A realistic pull request</a><span class="opened-by"><a data-hovercard-type="user">octo-author</a></span><span class="comment-area">${counter}</span></div>`;
 }
 
+function snapshotAttributes(element: Element) {
+  return {
+    ariaHidden: element.getAttribute('aria-hidden'),
+    hidden: element.getAttribute('hidden'),
+    style: element.getAttribute('style'),
+    tabindex: element.getAttribute('tabindex'),
+  };
+}
+
+function expectSnapshot(element: Element, expected: ReturnType<typeof snapshotAttributes>) {
+  expect(snapshotAttributes(element)).toEqual(expected);
+}
+
 class FakeObserver {
   static instances: FakeObserver[] = [];
   readonly observe = vi.fn();
@@ -36,6 +50,174 @@ describe('page reconciler', () => {
     expect(isPullRequestListRoute(new URL('https://github.com/o/r/pulls/?q=open'))).toBe(true);
     expect(isPullRequestListRoute(new URL('https://github.com/o/r/pulls/42'))).toBe(false);
     expect(isPullRequestListRoute(new URL('https://github.com/o/r/issues'))).toBe(false);
+  });
+
+  it('mount marker lives in the current row main content and never in native metadata', async () => {
+    const document = page(currentPrListHtml);
+    const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));
+    const reconciler = createPageReconciler({
+      document,
+      client: { loadPullRequest: vi.fn(async () => remote) },
+      IntersectionObserver: undefined,
+      uiFactory: { mount },
+    });
+
+    reconciler.reconcile();
+    await vi.waitFor(() => expect(mount).toHaveBeenCalledTimes(2));
+
+    for (const row of document.querySelectorAll<HTMLElement>('[id^="issue_"].js-issue-row')) {
+      const marker = row.querySelector('[data-pr-overview-mount-anchor]')!;
+      expect(marker.parentElement).toBe(row.querySelector('.flex-auto.min-width-0'));
+      expect(marker.closest('.hide-sm')).toBeNull();
+      expect(row.querySelector('.opened-by')!.contains(marker)).toBe(false);
+      expect(marker.getAttribute('aria-hidden')).toBe('true');
+    }
+    reconciler.cleanup();
+  });
+
+  it('zero-to-one adopts a counter without remounting or refetching', async () => {
+    const document = page(currentPrListHtml);
+    const row = document.querySelector<HTMLElement>('#issue_43')!;
+    document.querySelector('#issue_42')!.remove();
+    const client = { loadPullRequest: vi.fn(async () => remote) };
+    const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));
+    const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount } });
+
+    reconciler.reconcile();
+    await vi.waitFor(() => expect(mount).toHaveBeenCalledOnce());
+    const marker = row.querySelector('[data-pr-overview-mount-anchor]')!;
+    const counter = document.createElement('a');
+    counter.className = 'comments-link';
+    counter.setAttribute('aria-label', '1 comment');
+    counter.setAttribute('href', '/octo/demo/pull/43#comments');
+    counter.setAttribute('hidden', 'github-hidden');
+    counter.setAttribute('aria-hidden', 'github-aria');
+    counter.setAttribute('tabindex', '7');
+    counter.setAttribute('style', 'display: inline');
+    const expected = snapshotAttributes(counter);
+    row.querySelector('.hide-sm')!.append(counter);
+
+    await vi.waitFor(() => expect(counter.getAttribute('aria-hidden')).toBe('true'));
+    expect(mount).toHaveBeenCalledOnce();
+    expect(client.loadPullRequest).toHaveBeenCalledOnce();
+    expect(row.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
+    expect(row.querySelector('[data-pr-overview-mount-anchor]')).toBe(marker);
+
+    reconciler.cleanup();
+    expectSnapshot(counter, expected);
+  });
+
+  it('one-to-zero restores the departed counter without remounting or refetching', async () => {
+    const document = page(currentPrListHtml);
+    const row = document.querySelector<HTMLElement>('#issue_42')!;
+    document.querySelector('#issue_43')!.remove();
+    const counter = row.querySelector<HTMLAnchorElement>('[aria-label="2 comments"]')!;
+    counter.setAttribute('hidden', 'github-hidden');
+    counter.setAttribute('aria-hidden', 'github-aria');
+    counter.setAttribute('tabindex', '7');
+    counter.setAttribute('style', 'display: inline');
+    const expected = snapshotAttributes(counter);
+    const client = { loadPullRequest: vi.fn(async () => remote) };
+    const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));
+    const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount } });
+
+    reconciler.reconcile();
+    await vi.waitFor(() => expect(counter.getAttribute('aria-hidden')).toBe('true'));
+    counter.remove();
+
+    await vi.waitFor(() => expectSnapshot(counter, expected));
+    expect(mount).toHaveBeenCalledOnce();
+    expect(client.loadPullRequest).toHaveBeenCalledOnce();
+    expectSnapshot(counter, expected);
+    expect(row.querySelector('[data-pr-overview-mount-anchor]')).toBeTruthy();
+
+    reconciler.cleanup();
+    expect(row.querySelector('[data-pr-overview-mount-anchor]')).toBeNull();
+  });
+
+  it('malformed-to-ready updates the native counter without remounting or refetching', async () => {
+    const document = page(currentPrListHtml);
+    document.querySelector('#issue_43')!.remove();
+    const counter = document.querySelector<HTMLAnchorElement>('#issue_42 [aria-label="2 comments"]')!;
+    counter.setAttribute('aria-label', 'many comments');
+    const client = { loadPullRequest: vi.fn(async () => remote) };
+    const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));
+    const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount } });
+
+    reconciler.reconcile();
+    await vi.waitFor(() => expect(counter.getAttribute('aria-hidden')).toBe('true'));
+    counter.setAttribute('aria-label', '2 comments');
+
+    await vi.waitFor(() => expect(mount).toHaveBeenCalledOnce());
+    expect(client.loadPullRequest).toHaveBeenCalledOnce();
+    reconciler.cleanup();
+  });
+
+  it('counter replacement restores each native snapshot without remounting or refetching', async () => {
+    const document = page(currentPrListHtml);
+    const row = document.querySelector<HTMLElement>('#issue_42')!;
+    document.querySelector('#issue_43')!.remove();
+    const original = row.querySelector<HTMLAnchorElement>('[aria-label="2 comments"]')!;
+    original.setAttribute('hidden', 'github-hidden');
+    original.setAttribute('aria-hidden', 'github-aria');
+    original.setAttribute('tabindex', '7');
+    original.setAttribute('style', 'display: inline');
+    const originalSnapshot = snapshotAttributes(original);
+    const client = { loadPullRequest: vi.fn(async () => remote) };
+    const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));
+    const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount } });
+
+    reconciler.reconcile();
+    await vi.waitFor(() => expect(original.getAttribute('aria-hidden')).toBe('true'));
+    const replacement = original.cloneNode(true) as HTMLAnchorElement;
+    replacement.setAttribute('aria-label', '3 comments');
+    replacement.setAttribute('hidden', 'replacement-hidden');
+    replacement.setAttribute('aria-hidden', 'replacement-aria');
+    replacement.setAttribute('tabindex', '8');
+    replacement.setAttribute('style', 'display: contents');
+    const replacementSnapshot = snapshotAttributes(replacement);
+    original.replaceWith(replacement);
+
+    await vi.waitFor(() => expect(replacement.getAttribute('aria-hidden')).toBe('true'));
+    expect(mount).toHaveBeenCalledOnce();
+    expect(client.loadPullRequest).toHaveBeenCalledOnce();
+    expectSnapshot(original, originalSnapshot);
+
+    reconciler.cleanup();
+    expectSnapshot(replacement, replacementSnapshot);
+  });
+
+  it('pending replacement leaves both old and new counters visible until the mount resolves', async () => {
+    const document = page(currentPrListHtml);
+    const row = document.querySelector<HTMLElement>('#issue_42')!;
+    document.querySelector('#issue_43')!.remove();
+    const original = row.querySelector<HTMLAnchorElement>('[aria-label="2 comments"]')!;
+    let resolveMount!: (card: { remove(): void; update(): void }) => void;
+    const pendingMount = new Promise<{ remove(): void; update(): void }>((resolve) => { resolveMount = resolve; });
+    const mount = vi.fn(() => pendingMount);
+    const client = { loadPullRequest: vi.fn(async () => remote) };
+    const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount } });
+
+    reconciler.reconcile();
+    const replacement = original.cloneNode(true) as HTMLAnchorElement;
+    replacement.setAttribute('aria-label', '3 comments');
+    replacement.removeAttribute('hidden');
+    replacement.removeAttribute('aria-hidden');
+    replacement.removeAttribute('tabindex');
+    replacement.removeAttribute('style');
+    const replacementSnapshot = snapshotAttributes(replacement);
+    original.replaceWith(replacement);
+    await Promise.resolve();
+
+    expect(original.hidden).toBe(false);
+    expect(replacement.hidden).toBe(false);
+    expect(mount).toHaveBeenCalledOnce();
+    expect(client.loadPullRequest).toHaveBeenCalledOnce();
+
+    resolveMount({ remove: vi.fn(), update: vi.fn() });
+    await vi.waitFor(() => expect(replacement.hidden).toBe(true));
+    reconciler.cleanup();
+    expectSnapshot(replacement, replacementSnapshot);
   });
 
   it('reconciles a changed counter across 30 rows with bounded row-local queries', async () => {
@@ -101,7 +283,7 @@ describe('page reconciler', () => {
     await Promise.resolve();
     expect(title.hidden).toBe(false);
     expect(counter.hidden).toBe(true);
-    expect(mountedAt).toBe(counter);
+    expect(mountedAt).toHaveAttribute('data-pr-overview-mount-anchor');
   });
 
   it.each([
@@ -163,7 +345,7 @@ describe('page reconciler', () => {
     reconciler.reconcile();
     await Promise.resolve();
 
-    expect(initial.anchor).toBe(counter);
+    expect(initial.anchor).toHaveAttribute('data-pr-overview-mount-anchor');
     expect(initial.props.summary.totalComments).toEqual({
       message: 'GitHub comment counter is malformed.',
       status: 'error',
@@ -200,7 +382,7 @@ describe('page reconciler', () => {
     reconciler.reconcile();
     await Promise.resolve();
 
-    expect(initial.anchor).toBe(counter);
+    expect(initial.anchor).toHaveAttribute('data-pr-overview-mount-anchor');
     expect(initial.props.summary.totalComments).toEqual({
       message: 'GitHub comment counter is malformed.',
       status: 'error',
@@ -241,7 +423,7 @@ describe('page reconciler', () => {
       reconciler.reconcile();
       await Promise.resolve();
 
-      expect(initial.anchor).toBe(counterAnchor);
+      expect(initial.anchor).toHaveAttribute('data-pr-overview-mount-anchor');
       expect(initial.props.summary.totalComments).toEqual({
         message: 'GitHub comment counter is malformed.',
         status: 'error',
@@ -392,7 +574,7 @@ describe('page reconciler', () => {
     reconciler.reconcile();
     await Promise.resolve();
 
-    expect(mountedAt).toBe(counter);
+    expect(mountedAt).toHaveAttribute('data-pr-overview-mount-anchor');
     expect(counter.hidden).toBe(true);
   });
 
@@ -420,7 +602,7 @@ describe('page reconciler', () => {
     reconciler.reconcile();
     await Promise.resolve();
 
-    expect(mountedAt).toBe(counter);
+    expect(mountedAt).toHaveAttribute('data-pr-overview-mount-anchor');
     expect(counter.hidden).toBe(true);
     expect(initial.summary.totalComments).toEqual({ message: 'GitHub comment counter is malformed.', status: 'error' });
   });
@@ -445,7 +627,7 @@ describe('page reconciler', () => {
     reconciler.reconcile();
     await Promise.resolve();
 
-    expect(mountedAt).toBe(counter);
+    expect(mountedAt).toHaveAttribute('data-pr-overview-mount-anchor');
     expect(counter.hidden).toBe(true);
   });
 
@@ -468,7 +650,7 @@ describe('page reconciler', () => {
     expect(() => reconciler.reconcile()).not.toThrow();
     await Promise.resolve();
 
-    expect(mountedAt).toBe(counter);
+    expect(mountedAt).toHaveAttribute('data-pr-overview-mount-anchor');
     expect(counter.hidden).toBe(true);
   });
 
@@ -479,7 +661,7 @@ describe('page reconciler', () => {
     const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount(anchor, props) { initial = { anchor, props }; return { remove: vi.fn(), update: vi.fn() }; } } });
     reconciler.reconcile();
     await Promise.resolve();
-    expect(initial.anchor).toBe(malformed);
+    expect(initial.anchor).toHaveAttribute('data-pr-overview-mount-anchor');
     expect(initial.props.summary.totalComments).toEqual({ message: 'GitHub comment counter is malformed.', status: 'error' });
     expect(malformed.hidden).toBe(true);
   });
@@ -578,27 +760,24 @@ describe('page reconciler', () => {
     expect(mount).toHaveBeenCalledTimes(2);
   });
 
-  it('creates and removes a zero-count anchor and remounts when GitHub replaces it', () => {
+  it('creates and removes a stable mount marker for a zero-count row', () => {
     const document = page(row(43, ''));
     const client = { loadPullRequest: vi.fn(async () => remote) };
     const mounted: Element[] = [];
     const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount(anchor) { mounted.push(anchor); return { remove: vi.fn(), update: vi.fn() }; } } });
 
     reconciler.reconcile();
-    const extensionAnchor = document.querySelector('[data-pr-overview-zero-anchor]')!;
+    const extensionAnchor = document.querySelector('[data-pr-overview-mount-anchor]')!;
     expect(extensionAnchor).toBeTruthy();
     expect(extensionAnchor.tagName).toBe('SPAN');
     expect(extensionAnchor).not.toHaveAttribute('href');
     expect((extensionAnchor as HTMLElement).tabIndex).toBe(-1);
     expect(mounted).toEqual([extensionAnchor]);
-    extensionAnchor.replaceWith(Object.assign(document.createElement('a'), { href: '/octo/demo/pull/43#comments', ariaLabel: '1 comment' }));
-    reconciler.reconcile();
-    expect(mounted).toHaveLength(2);
     reconciler.cleanup();
-    expect(document.querySelector('[data-pr-overview-zero-anchor]')).toBeNull();
+    expect(document.querySelector('[data-pr-overview-mount-anchor]')).toBeNull();
   });
 
-  it('remounts when a new ready counter supersedes a connected former counter', async () => {
+  it('adopts a new ready counter without remounting when GitHub retains the former node', async () => {
     const document = page(row());
     const oldCounter = document.querySelector<HTMLAnchorElement>('.comments-link')!;
     const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));
@@ -624,10 +803,10 @@ describe('page reconciler', () => {
     document.querySelector('#issue_42')!.append(oldCounter);
 
     reconciler.reconcile();
-    await vi.waitFor(() => expect(mount).toHaveBeenCalledTimes(2));
-    await Promise.resolve();
+    await vi.waitFor(() => expect(replacement.hidden).toBe(true));
 
     expect(oldCounter.hidden).toBe(false);
+    expect(mount).toHaveBeenCalledOnce();
     expect(replacement.hidden).toBe(true);
   });
 

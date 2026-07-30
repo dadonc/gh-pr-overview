@@ -3,7 +3,7 @@ import type { AgentParticipation, PullRequestSummary, SectionState } from './dom
 import { AI_AGENT_REGISTRY } from './domain';
 
 export const CARD_STYLES = `
-:host { display: inline-block; max-width: 100%; }
+:host { display: block; max-width: 100%; margin-top: 4px; }
 .pr-overview-card { color: var(--fgColor-default, #1f2328); font: 12px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; display: flex; flex-wrap: wrap; gap: 3px 8px; align-items: center; border: 1px solid var(--borderColor-muted, #d0d7de); border-radius: 6px; background: var(--bgColor-default, #fff); padding: 4px 6px; }
 .pr-overview-card.authored { border-left: 3px solid var(--fgColor-accent, #0969da); }
 .metric { color: var(--fgColor-muted, #59636e); text-decoration: none; white-space: nowrap; }
