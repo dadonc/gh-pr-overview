@@ -121,7 +121,7 @@ encoded-separator checks into `trustedGitHubUrl`. Use separate validators:
 
 ```ts
 const validOwner = (value: string) =>
-  /^[A-Za-z0-9][A-Za-z0-9-]*$/.test(value);
+  /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
 
 const validRepository = (value: string) =>
   /^(?!\.{1,2}$)[A-Za-z0-9._-]+$/.test(value);
