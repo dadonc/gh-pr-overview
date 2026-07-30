@@ -58,6 +58,12 @@ interface FetchSuccess {
 
 type FetchResult = FetchFailure | FetchSuccess;
 
+interface NormalizedTimelineFragment {
+  dedupeKey: string;
+  focusedPullRequestId: string | undefined;
+  href: string;
+}
+
 function abortError(): DOMException {
   return new DOMException('The operation was aborted.', 'AbortError');
 }
@@ -74,6 +80,48 @@ function asError(error: unknown): Error {
 function canonicalUrl(identity: PullRequestIdentity, kind: 'conversation' | 'files'): string {
   const suffix = kind === 'files' ? '/files' : '';
   return `${GITHUB_ORIGIN}${pullRequestPath(identity)}${suffix}`;
+}
+
+function normalizeTimelineFragment(
+  candidate: string,
+  identity: PullRequestIdentity,
+): NormalizedTimelineFragment | undefined {
+  const url = trustedGitHubUrl(candidate);
+  if (!url || url.hash) return undefined;
+
+  const legacyPath = `${pullRequestPath(identity)}/timeline`;
+  const focusedPath = `/${identity.owner}/${identity.repository}/timeline_focused_item`;
+  const isLegacy = url.pathname.toLowerCase() === legacyPath.toLowerCase();
+  const isFocused = url.pathname.toLowerCase() === focusedPath.toLowerCase();
+  if (!isLegacy && !isFocused) return undefined;
+
+  const parameters = url.searchParams;
+  let focusedPullRequestId: string | undefined;
+  if (isFocused) {
+    const ids = parameters.getAll('id');
+    const cursors = parameters.getAll('after_cursor');
+    if (
+      parameters.size !== 2 ||
+      ids.length !== 1 ||
+      cursors.length !== 1 ||
+      !cursors[0] ||
+      !/^PR_[A-Za-z0-9_-]+$/.test(ids[0] ?? '')
+    ) return undefined;
+    focusedPullRequestId = ids[0];
+  } else {
+    const after = parameters.getAll('after');
+    const afterCursor = parameters.getAll('after_cursor');
+    if (
+      parameters.size !== 1 ||
+      (after.length === 1 && Boolean(after[0])) === (afterCursor.length === 1 && Boolean(afterCursor[0]))
+    ) return undefined;
+  }
+
+  return {
+    dedupeKey: `${url.origin}${url.pathname.toLowerCase()}${url.search}`,
+    focusedPullRequestId,
+    href: url.href,
+  };
 }
 
 /**
@@ -94,7 +142,7 @@ export function isAllowedPullRequestUrl(
   if (kind === 'conversation') return sameConversationPath && !url.search && !url.hash;
   if (kind === 'files') return url.pathname.toLowerCase() === `${base}/files`.toLowerCase() && !url.search && !url.hash;
 
-  return url.pathname.toLowerCase() === `${base}/timeline`.toLowerCase() && !url.hash;
+  return Boolean(normalizeTimelineFragment(candidate, identity));
 }
 
 export function createFetchLimiter(maximum = 4): FetchLimiter {
@@ -257,7 +305,27 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
       addIncompleteReason(`The files page is incomplete for inline review data: ${diff.reason}`);
     }
 
-    const queuedFragments = [...extractTimeline(conversation.document, identity).nextTimelineFragments];
+    let pinnedFocusedPullRequestId: string | undefined;
+    const queuedFragments: NormalizedTimelineFragment[] = [];
+    const addFragment = (candidate: string, isConversationLoader = false) => {
+      const fragment = normalizeTimelineFragment(candidate, identity);
+      if (!fragment) {
+        addIncompleteReason('GitHub exposed an invalid timeline fragment.');
+        return;
+      }
+      if (fragment.focusedPullRequestId) {
+        if (isConversationLoader && pinnedFocusedPullRequestId === undefined) {
+          pinnedFocusedPullRequestId = fragment.focusedPullRequestId;
+        } else if (pinnedFocusedPullRequestId !== fragment.focusedPullRequestId) {
+          addIncompleteReason('GitHub exposed an invalid timeline fragment.');
+          return;
+        }
+      }
+      queuedFragments.push(fragment);
+    };
+    for (const fragment of extractTimeline(conversation.document, identity).nextTimelineFragments) {
+      addFragment(fragment, true);
+    }
     const seenFragments = new Set<string>();
     let followed = 0;
     while (queuedFragments.length > 0) {
@@ -265,22 +333,16 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
         addIncompleteReason('GitHub exposed more than 20 timeline fragments.');
         break;
       }
-      const batch: string[] = [];
+      const batch: NormalizedTimelineFragment[] = [];
       while (queuedFragments.length > 0 && batch.length + followed < MAX_TIMELINE_FRAGMENTS && batch.length < 4) {
-        const candidate = queuedFragments.shift()!;
-        if (!isAllowedPullRequestUrl(candidate, identity, 'fragment')) {
-          addIncompleteReason('GitHub exposed an invalid timeline fragment.');
-          continue;
-        }
-        const url = new URL(candidate, GITHUB_ORIGIN);
-        const normalized = `${url.origin}${url.pathname.toLowerCase()}${url.search}`;
-        if (seenFragments.has(normalized)) continue;
-        seenFragments.add(normalized);
-        batch.push(normalized);
+        const fragment = queuedFragments.shift()!;
+        if (seenFragments.has(fragment.dedupeKey)) continue;
+        seenFragments.add(fragment.dedupeKey);
+        batch.push(fragment);
       }
       if (batch.length === 0) continue;
       followed += batch.length;
-      const results = await Promise.all(batch.map((target) => settle(target, 'fragment')));
+      const results = await Promise.all(batch.map(({ href }) => settle(href, 'fragment')));
       for (const result of results) {
         if (!result.ok) {
           fetchFailed = true;
@@ -289,7 +351,9 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
         }
         timelineDocuments.push(result.document);
         if (!hasTimelineEvidence(result.document)) addIncompleteReason('A timeline fragment had no recognizable review data.');
-        queuedFragments.push(...extractTimeline(result.document, identity).nextTimelineFragments);
+        for (const fragment of extractTimeline(result.document, identity).nextTimelineFragments) {
+          addFragment(fragment);
+        }
       }
     }
 

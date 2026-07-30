@@ -3,6 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import diffAggregateHtml from '../test/fixtures/github/diff-aggregate.html?raw';
 import diffRenderedPartialHtml from '../test/fixtures/github/diff-rendered-partial.html?raw';
 import timelineHtml from '../test/fixtures/github/timeline.html?raw';
+import currentConversationHtml from '../test/fixtures/github/current/conversation.html?raw';
+import currentFilesHtml from '../test/fixtures/github/current/files.html?raw';
+import currentTimelineFragmentHtml from '../test/fixtures/github/current/timeline-fragment.html?raw';
 import {
   createFetchLimiter,
   createGitHubClient,
@@ -55,12 +58,19 @@ describe('GitHub pull-request data pipeline', () => {
     })).toBe(false);
   });
 
-  it('accepts only canonical same-PR GitHub conversation, files, and timeline URLs', () => {
+  it('accepts only canonical same-PR focused and legacy timeline URLs', () => {
     expect(isAllowedPullRequestUrl('/octo/demo/pull/42', identity, 'conversation')).toBe(true);
     expect(isAllowedPullRequestUrl('https://github.com/octo/demo/pull/42/files', identity, 'files')).toBe(true);
-    expect(isAllowedPullRequestUrl('/octo/demo/pull/42/timeline?after=cursor', identity, 'fragment')).toBe(true);
-    expect(isAllowedPullRequestUrl('/octo/demo/pull/42/timeline?after_cursor=opaque&source=fragment', identity, 'fragment')).toBe(true);
-    expect(isAllowedPullRequestUrl('/octo/demo/pull/42/timeline?after=abc%2Fdef', identity, 'fragment')).toBe(true);
+    expect(isAllowedPullRequestUrl(
+      'octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42',
+      identity,
+      'fragment',
+    )).toBe(true);
+    expect(isAllowedPullRequestUrl(
+      '/octo/demo/pull/42/timeline?after=CaseSensitiveToken',
+      identity,
+      'fragment',
+    )).toBe(true);
 
     for (const candidate of [
       'https://api.github.com/repos/octo/demo/pulls/42',
@@ -80,9 +90,65 @@ describe('GitHub pull-request data pipeline', () => {
       '/octo/demo/pull/42/../42/timeline?after=cursor',
       '//github.com/octo/demo/pull/42/timeline?after=cursor',
       '/octo/demo/issues/42',
+      '/other/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
+      '/octo/other/timeline_focused_item?after_cursor=cursor&id=PR_current42',
+      '/octo/demo/pull/42/timeline_focused_item?after_cursor=cursor&id=PR_current42',
+      '/octo/demo/timeline_focused_item?after_cursor=cursor',
+      '/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42&id=PR_other',
+      '/octo/demo/timeline_focused_item?after_cursor=cursor&id=not-a-pr-node',
+      '/octo/demo/timeline_focused_item?id=PR_current42',
+      '/octo/demo/timeline_focused_item?after_cursor=one&after_cursor=two&id=PR_current42',
+      '/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42&source=fragment',
+      'https://user:secret@github.com/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
+      'https://github.com:444/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
+      'https://evil.test/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
+      '//github.com/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
+      '/octo/demo/../demo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
+      '/octo\\demo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
+      '/octo%2fdemo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
+      '/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42#fragment',
+      '/octo/demo/pull/42/timeline',
+      '/octo/demo/pull/42/timeline?after=',
+      '/octo/demo/pull/42/timeline?after=cursor&after_cursor=other',
+      '/octo/demo/pull/42/timeline?after=cursor&source=fragment',
     ]) {
       expect(isAllowedPullRequestUrl(candidate, identity, 'fragment')).toBe(false);
     }
+  });
+
+  it('follows a focused timeline fragment with its original cursor encoding and rejects an ID mismatch', async () => {
+    const mismatchedNextFragment = `${currentTimelineFragmentHtml}<div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/timeline_focused_item?after_cursor=Later&id=PR_other"></div>`;
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      const value = String(url);
+      if (value.endsWith('/files')) return response(currentFilesHtml, value);
+      if (value === 'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42') {
+        return response(mismatchedNextFragment, value);
+      }
+      return response(currentConversationHtml, value);
+    });
+
+    const result = await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(fetcher).toHaveBeenCalledWith(
+      'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42',
+      expect.objectContaining({
+        credentials: 'same-origin',
+        method: 'GET',
+        redirect: 'error',
+      }),
+    );
+    expect(fetcher).not.toHaveBeenCalledWith(
+      'https://github.com/octo/demo/timeline_focused_item?after_cursor=Later&id=PR_other',
+      expect.anything(),
+    );
+    expect(result.reviewThreads).toMatchObject({
+      reason: expect.stringContaining('GitHub exposed an invalid timeline fragment.'),
+      status: 'partial',
+    });
+    expect(result.agents).toMatchObject({
+      reason: expect.stringContaining('GitHub exposed an invalid timeline fragment.'),
+      status: 'partial',
+    });
   });
 
   it('uses a credentialed GET with the caller abort signal and rejects redirected cross-origin content', async () => {
