@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import currentFilesHtml from '../test/fixtures/github/current/files.html?raw';
 import currentFilesNoAggregateHtml from '../test/fixtures/github/current/files-no-aggregate.html?raw';
+import currentAutomatedCommentHtml from '../test/fixtures/github/current/automated-comment.html?raw';
+import currentConversationHtml from '../test/fixtures/github/current/conversation.html?raw';
 import diffAggregateHtml from '../test/fixtures/github/diff-aggregate.html?raw';
 import diffRenderedPartialHtml from '../test/fixtures/github/diff-rendered-partial.html?raw';
 import prListHtml from '../test/fixtures/github/pr-list.html?raw';
@@ -9,11 +11,16 @@ import timelineHtml from '../test/fixtures/github/timeline.html?raw';
 import {
   extractDiffSummary,
   extractPullRequestRows,
-  extractTimeline,
+  extractTimeline as extractTimelineWithIdentity,
 } from './github-dom';
 import { aggregateAgentParticipation, classifyReviewThreads } from './domain';
 
 const parse = (html: string) => new DOMParser().parseFromString(html, 'text/html');
+const timelineIdentity = { number: 42, owner: 'octo', repository: 'demo' };
+const extractTimeline = (
+  input: Document | readonly Document[],
+  identity = timelineIdentity,
+) => extractTimelineWithIdentity(input, identity);
 
 describe('extractPullRequestRows', () => {
   it('uses canonical pull links and native counters without reconstructing comments', () => {
@@ -225,6 +232,78 @@ describe('extractPullRequestRows', () => {
 });
 
 describe('extractTimeline', () => {
+  it('counts a current deferred shell exactly but marks hidden agent bodies partial', () => {
+    const result = extractTimeline(parse(currentConversationHtml), timelineIdentity);
+
+    expect(result.threads).toEqual([
+      { id: 'thread-2497380155', isOutdated: true, isResolved: true },
+    ]);
+    expect(result.completeness.reviewThreads.isComplete).toBe(true);
+    expect(result.completeness.agents.isComplete).toBe(false);
+  });
+
+  it('detects current automatic request and nested started-reviewing Copilot events', () => {
+    const result = extractTimeline(parse(currentConversationHtml), timelineIdentity);
+
+    expect(result.artifacts.reviewRequests).toContainEqual({
+      action: 'requested',
+      id: 'event-100',
+      requestedLogin: 'copilot-pull-request-reviewer',
+    });
+    expect(result.artifacts.reviewEvents).toContainEqual({
+      action: 'started-reviewing',
+      actorLogin: 'copilot-pull-request-reviewer',
+      id: 'event-101',
+    });
+  });
+
+  it('extracts Copilot from a validated automated-comment payload', () => {
+    const result = extractTimeline(parse(currentAutomatedCommentHtml), timelineIdentity);
+
+    expect(result.artifacts.inlineComments).toContainEqual({
+      actorLogin: 'copilot-pull-request-reviewer',
+      id: 'discussion_r3676782635',
+    });
+  });
+
+  it.each([
+    ['wrong owner', '/other/demo/pull/42/threads/2497380155'],
+    ['wrong repository', '/octo/other/pull/42/threads/2497380155'],
+    ['wrong pull request', '/octo/demo/pull/43/threads/2497380155'],
+    ['wrong origin', 'https://evil.example/octo/demo/pull/42/threads/2497380155'],
+    ['credentials', 'https://user:secret@github.com/octo/demo/pull/42/threads/2497380155'],
+    ['port', 'https://github.com:443/octo/demo/pull/42/threads/2497380155'],
+    ['traversal', '/octo/demo/pull/42/threads/../2497380155'],
+    ['encoded separator', '/octo/demo/pull/42/threads%2f2497380155'],
+    ['nonnumeric thread', '/octo/demo/pull/42/threads/not-a-number'],
+    ['hash', '/octo/demo/pull/42/threads/2497380155#discussion_r1'],
+  ])('rejects a deferred URL with %s', (_name, deferredUrl) => {
+    const result = extractTimeline(parse(`
+      <review-thread-collapsible
+        class="js-resolvable-timeline-thread-container"
+        data-deferred-content-url="${deferredUrl}"
+        data-resolved="true"
+      ></review-thread-collapsible>
+    `), timelineIdentity);
+
+    expect(result.threads).toEqual([]);
+  });
+
+  it('marks malformed automated-comment JSON as partial without affecting thread completeness', () => {
+    const result = extractTimeline(parse(`
+      <article id="discussion_r3676782635">
+        <react-partial><script type="application/json" data-target="react-partial.embeddedData">{</script></react-partial>
+      </article>
+    `), timelineIdentity);
+
+    expect(result.threads).toEqual([]);
+    expect(result.completeness.reviewThreads).toEqual({ isComplete: true, reasons: [] });
+    expect(result.completeness.agents).toEqual({
+      isComplete: false,
+      reasons: ['An automated review comment payload could not be read.'],
+    });
+  });
+
   it('deduplicates semantic and legacy resolvable threads and merges non-active flags', () => {
     const result = extractTimeline([parse(timelineHtml), parse(timelineHtml)]);
 
@@ -238,7 +317,10 @@ describe('extractTimeline', () => {
       { id: 'PRRT_second_active', isOutdated: false, isResolved: false },
       { id: 'PRRT_third_active', isOutdated: false, isResolved: false },
     ]);
-    expect(result.completeness).toEqual({ isComplete: true, reasons: [] });
+    expect(result.completeness).toEqual({
+      agents: { isComplete: true, reasons: [] },
+      reviewThreads: { isComplete: true, reasons: [] },
+    });
     expect(result.nextTimelineFragments).toEqual(['/octo/demo/pull/42/timeline?after=cursor']);
   });
 
@@ -296,8 +378,11 @@ describe('extractTimeline', () => {
       unresolved: 0,
     });
     expect(result.completeness).toEqual({
-      isComplete: false,
-      reasons: ['A resolvable review thread had unreadable resolution or outdated state.'],
+      agents: { isComplete: true, reasons: [] },
+      reviewThreads: {
+        isComplete: false,
+        reasons: ['A resolvable review thread had unreadable resolution or outdated state.'],
+      },
     });
   });
 
@@ -332,8 +417,11 @@ describe('extractTimeline', () => {
       unresolved: 0,
     });
     expect(result.completeness).toEqual({
-      isComplete: false,
-      reasons: ['A resolvable review thread had unreadable resolution or outdated state.'],
+      agents: { isComplete: true, reasons: [] },
+      reviewThreads: {
+        isComplete: false,
+        reasons: ['A resolvable review thread had unreadable resolution or outdated state.'],
+      },
     });
   });
 
@@ -419,13 +507,13 @@ describe('extractTimeline', () => {
   it('keeps structured and legacy review requests in document chronology', () => {
     const document = parse(`
       <div id="request-1" data-review-request-action="requested" data-review-requested-login="coderabbitai"></div>
-      <div class="TimelineItem" id="request-2">removed review request for <a data-hovercard-type="user">coderabbitai</a></div>
+      <div class="TimelineItem" id="event-2">removed review request for <a data-hovercard-type="user">coderabbitai</a></div>
       <div id="request-3" data-review-request-action="requested" data-review-requested-login="coderabbitai"></div>
     `);
 
     expect(extractTimeline(document).artifacts.reviewRequests).toEqual([
       { action: 'requested', id: 'request-1', requestedLogin: 'coderabbitai' },
-      { action: 'removed', id: 'request-2', requestedLogin: 'coderabbitai' },
+      { action: 'removed', id: 'event-2', requestedLogin: 'coderabbitai' },
       { action: 'requested', id: 'request-3', requestedLogin: 'coderabbitai' },
     ]);
     expect(extractTimeline(document).artifacts.currentReviewRequests).toEqual([
@@ -447,7 +535,7 @@ describe('extractTimeline', () => {
     const result = extractTimeline(parse(`
       <article id="issuecomment-100"><div class="timeline-comment-header"><a data-hovercard-url="/users/gemini-cli[bot]/hovercard"><span>Gemini</span></a></div><div data-reaction-content="eyes" data-reaction-id="r1"><span><a data-hovercard-url="/apps/claude/hovercard">Claude</a></span></div></article>
       <article id="pullrequestreview-100"><header><a data-hovercard-url="/apps/openai-code-agent/hovercard">Codex</a></header></article>
-      <div class="TimelineItem" id="request-human-first">requested a review from <a data-hovercard-type="user">human-author</a> and <a data-hovercard-url="/apps/coderabbitai/hovercard">CodeRabbit</a></div>
+      <div class="TimelineItem" id="event-human-first">requested a review from <a data-hovercard-type="user">human-author</a> and <a data-hovercard-url="/apps/coderabbitai/hovercard">CodeRabbit</a></div>
       <span aria-label="4 eyes reactions">4</span>
     `));
 
@@ -455,7 +543,7 @@ describe('extractTimeline', () => {
     expect(result.artifacts.reviews).toEqual([{ actorLogin: 'openai-code-agent', id: 'pullrequestreview-100' }]);
     expect(result.artifacts.reactions).toEqual([{ actorLogin: 'claude', content: 'eyes', id: 'r1' }]);
     expect(result.artifacts.reviewRequests).toEqual([
-      { action: 'requested', id: 'request-human-first', requestedLogin: 'coderabbitai' },
+      { action: 'requested', id: 'event-human-first', requestedLogin: 'coderabbitai' },
     ]);
   });
 
@@ -554,8 +642,11 @@ describe('extractTimeline', () => {
       { id: 'PRRT_known_nonactive', isOutdated: false, isResolved: true },
     ]);
     expect(result.completeness).toEqual({
-      isComplete: false,
-      reasons: ['A resolvable review thread had unreadable resolution or outdated state.'],
+      agents: { isComplete: true, reasons: [] },
+      reviewThreads: {
+        isComplete: false,
+        reasons: ['A resolvable review thread had unreadable resolution or outdated state.'],
+      },
     });
   });
 
@@ -570,7 +661,10 @@ describe('extractTimeline', () => {
     expect(result.threads).toEqual([
       { id: 'PRRT_structured', isOutdated: false, isResolved: true },
     ]);
-    expect(result.completeness).toEqual({ isComplete: true, reasons: [] });
+    expect(result.completeness).toEqual({
+      agents: { isComplete: true, reasons: [] },
+      reviewThreads: { isComplete: true, reasons: [] },
+    });
   });
 
   it('makes a skipped resolvable thread incomplete while retaining next fragment discovery', () => {
@@ -581,8 +675,11 @@ describe('extractTimeline', () => {
 
     expect(result.threads).toEqual([]);
     expect(result.completeness).toEqual({
-      isComplete: false,
-      reasons: ['A resolvable review thread had no stable identity.'],
+      agents: { isComplete: true, reasons: [] },
+      reviewThreads: {
+        isComplete: false,
+        reasons: ['A resolvable review thread had no stable identity.'],
+      },
     });
     expect(result.nextTimelineFragments).toEqual(['/o/r/pull/1/timeline?after=next']);
   });

@@ -241,30 +241,35 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
     }
 
     const timelineDocuments: Document[] = [conversation.document];
-    const incompleteReasons: string[] = [];
+    const agentIncompleteReasons: string[] = [];
+    const reviewThreadIncompleteReasons: string[] = [];
+    const addIncompleteReason = (reason: string) => {
+      agentIncompleteReasons.push(reason);
+      reviewThreadIncompleteReasons.push(reason);
+    };
     let fetchFailed = !files.ok;
-    if (!hasTimelineEvidence(conversation.document)) incompleteReasons.push('GitHub did not expose recognizable timeline evidence.');
-    if (!files.ok) incompleteReasons.push('The files page could not be loaded for inline review data.');
+    if (!hasTimelineEvidence(conversation.document)) addIncompleteReason('GitHub did not expose recognizable timeline evidence.');
+    if (!files.ok) addIncompleteReason('The files page could not be loaded for inline review data.');
     if (files.ok && filesMayHideTimelineData(files.document)) {
-      incompleteReasons.push('The files page has unloaded or collapsed content that can hide inline review data.');
+      addIncompleteReason('The files page has unloaded or collapsed content that can hide inline review data.');
     }
     if (files.ok && diff.status === 'partial') {
-      incompleteReasons.push(`The files page is incomplete for inline review data: ${diff.reason}`);
+      addIncompleteReason(`The files page is incomplete for inline review data: ${diff.reason}`);
     }
 
-    const queuedFragments = [...extractTimeline(conversation.document).nextTimelineFragments];
+    const queuedFragments = [...extractTimeline(conversation.document, identity).nextTimelineFragments];
     const seenFragments = new Set<string>();
     let followed = 0;
     while (queuedFragments.length > 0) {
       if (followed >= MAX_TIMELINE_FRAGMENTS) {
-        incompleteReasons.push('GitHub exposed more than 20 timeline fragments.');
+        addIncompleteReason('GitHub exposed more than 20 timeline fragments.');
         break;
       }
       const batch: string[] = [];
       while (queuedFragments.length > 0 && batch.length + followed < MAX_TIMELINE_FRAGMENTS && batch.length < 4) {
         const candidate = queuedFragments.shift()!;
         if (!isAllowedPullRequestUrl(candidate, identity, 'fragment')) {
-          incompleteReasons.push('GitHub exposed an invalid timeline fragment.');
+          addIncompleteReason('GitHub exposed an invalid timeline fragment.');
           continue;
         }
         const url = new URL(candidate, GITHUB_ORIGIN);
@@ -279,19 +284,25 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
       for (const result of results) {
         if (!result.ok) {
           fetchFailed = true;
-          incompleteReasons.push(`A timeline fragment could not be loaded: ${result.error.message}`);
+          addIncompleteReason(`A timeline fragment could not be loaded: ${result.error.message}`);
           continue;
         }
         timelineDocuments.push(result.document);
-        if (!hasTimelineEvidence(result.document)) incompleteReasons.push('A timeline fragment had no recognizable review data.');
-        queuedFragments.push(...extractTimeline(result.document).nextTimelineFragments);
+        if (!hasTimelineEvidence(result.document)) addIncompleteReason('A timeline fragment had no recognizable review data.');
+        queuedFragments.push(...extractTimeline(result.document, identity).nextTimelineFragments);
       }
     }
 
     if (files.ok) timelineDocuments.push(files.document);
-    const timeline = extractTimeline(timelineDocuments);
-    if (!timeline.completeness.isComplete) incompleteReasons.push(...timeline.completeness.reasons);
-    const timelineComplete = incompleteReasons.length === 0;
+    const timeline = extractTimeline(timelineDocuments, identity);
+    if (!timeline.completeness.agents.isComplete) {
+      agentIncompleteReasons.push(...timeline.completeness.agents.reasons);
+    }
+    if (!timeline.completeness.reviewThreads.isComplete) {
+      reviewThreadIncompleteReasons.push(...timeline.completeness.reviewThreads.reasons);
+    }
+    const agentsComplete = agentIncompleteReasons.length === 0;
+    const reviewThreadsComplete = reviewThreadIncompleteReasons.length === 0;
     const threadData = classifyReviewThreads(timeline.threads);
     const agentData = aggregateAgentParticipation({
       comments: timeline.artifacts.comments,
@@ -304,11 +315,11 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
     });
 
     return {
-      cacheable: !fetchFailed && timelineComplete && diff.status === 'ready',
+      cacheable: !fetchFailed && agentsComplete && reviewThreadsComplete && diff.status === 'ready',
       summary: {
-        agents: sectionFromCompleteness(agentData, timelineComplete, incompleteReasons),
+        agents: sectionFromCompleteness(agentData, agentsComplete, agentIncompleteReasons),
         diff,
-        reviewThreads: sectionFromCompleteness(threadData, timelineComplete, incompleteReasons),
+        reviewThreads: sectionFromCompleteness(threadData, reviewThreadsComplete, reviewThreadIncompleteReasons),
       },
     };
   };

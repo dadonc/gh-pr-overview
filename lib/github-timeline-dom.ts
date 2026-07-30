@@ -1,5 +1,14 @@
-import type { ReviewThread } from './domain';
-import { normalizeAgentAccountLogin, normalizeAgentLogin } from './domain';
+import type { PullRequestIdentity, ReviewThread } from './domain';
+import {
+  AI_AGENT_REGISTRY,
+  normalizeAgentAccountLogin,
+  normalizeAgentLogin,
+} from './domain';
+import {
+  isValidPullRequestIdentity,
+  pullRequestPath,
+  trustedGitHubUrl,
+} from './github-url';
 
 export interface ExtractionCompleteness {
   isComplete: boolean;
@@ -21,7 +30,10 @@ export interface TimelineArtifactsExtraction {
 }
 export interface TimelineExtraction {
   artifacts: TimelineArtifactsExtraction;
-  completeness: ExtractionCompleteness;
+  completeness: {
+    agents: ExtractionCompleteness;
+    reviewThreads: ExtractionCompleteness;
+  };
   nextTimelineFragments: readonly string[];
   threads: readonly ReviewThread[];
 }
@@ -51,11 +63,36 @@ function actorLogin(element: Element, includeNestedActors = false): string | und
 function typedResponseId(element: Element): string | undefined { return /^(?:issuecomment-|pullrequestreview-|discussion_r|discussion-diff-)/.test(element.id) ? element.id : undefined; }
 function stableId(element: Element): string | undefined { return (element.getAttribute('data-gid') ?? element.id) || undefined; }
 function booleanAttribute(element: Element, name: string): boolean | undefined { const value = element.getAttribute(name)?.toLowerCase(); return value === 'true' ? true : value === 'false' ? false : undefined; }
-function threadIdentities(root: Element): string[] {
-  const identities: string[] = []; const add = (value: string | null | undefined) => { if (value && !identities.includes(value)) identities.push(value); };
-  add(root.querySelector<HTMLInputElement>('input[name="pull_request_review_thread_id"]')?.value); add(root.getAttribute('data-review-thread-id')); add(root.getAttribute('data-pull-request-review-thread-id')); add(root.getAttribute('data-gid'));
-  for (const anchor of root.querySelectorAll<HTMLAnchorElement>('a[href]')) add(anchor.getAttribute('href')?.match(/#(discussion_(?:r|diff-)[^?#/]+)/)?.[1]);
-  add(root.querySelector<HTMLElement>('[id^="discussion_r"], [id^="discussion-diff-"]')?.id); return identities;
+function deferredThreadIdentity(
+  root: Element,
+  identity: PullRequestIdentity,
+): string | undefined {
+  if (!isValidPullRequestIdentity(identity)) return undefined;
+
+  const url = trustedGitHubUrl(root.getAttribute('data-deferred-content-url'));
+  if (!url || url.hash) return undefined;
+
+  const path = pullRequestPath(identity).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = url.pathname.match(new RegExp(`^${path}/threads/([1-9]\\d*)$`, 'i'));
+  return match ? `thread-${match[1]}` : undefined;
+}
+
+function threadIdentities(root: Element, identity: PullRequestIdentity): string[] {
+  const identities: string[] = [];
+  const add = (value: string | null | undefined) => {
+    if (value && !identities.includes(value)) identities.push(value);
+  };
+
+  add(root.querySelector<HTMLInputElement>('input[name="pull_request_review_thread_id"]')?.value);
+  add(root.getAttribute('data-review-thread-id'));
+  add(root.getAttribute('data-pull-request-review-thread-id'));
+  add(root.getAttribute('data-gid'));
+  for (const anchor of root.querySelectorAll<HTMLAnchorElement>('a[href]')) {
+    add(anchor.getAttribute('href')?.match(/#(discussion_(?:r|diff-)[^?#/]+)/)?.[1]);
+  }
+  add(root.querySelector<HTMLElement>('[id^="discussion_r"], [id^="discussion-diff-"]')?.id);
+  add(deferredThreadIdentity(root, identity));
+  return identities;
 }
 interface ParsedThreadState { isReadable: boolean; value: boolean; }
 interface ThreadCandidate { identities: readonly string[]; outdated: ParsedThreadState; resolved: ParsedThreadState; }
@@ -96,22 +133,147 @@ function mergeResponseCandidates(candidates: readonly ResponseCandidate[]): { co
   for (const namespace of [reviewCandidates, commentCandidates]) for (const group of groupAliasedCandidates(namespace)) { const id = [...new Set(group.flatMap((candidate) => candidate.identities))].sort((left, right) => responseIdentityRank(left) - responseIdentityRank(right) || left.localeCompare(right))[0]; if (!id) continue; const seenKinds = new Set<ResponseKind>(); for (const candidate of group) { if (seenKinds.has(candidate.kind)) continue; seenKinds.add(candidate.kind); targets[candidate.kind].push({ actorLogin: candidate.actorLogin, id }); } }
   return result;
 }
-export function extractTimeline(input: Document | readonly Document[]): TimelineExtraction {
-  const threadCandidates: ThreadCandidate[] = []; const responseCandidates: ResponseCandidate[] = []; const reviewRequests: FormalReviewRequestExtraction[] = []; const reviewEvents: ReviewEventExtraction[] = []; const reactions: ReactionExtraction[] = []; const seen = new Map<string, Set<string>>();
+function loginForAgentLabel(value: string | null | undefined): string | undefined {
+  const label = value?.trim().toLowerCase();
+  return AI_AGENT_REGISTRY.find(
+    (agent) => agent.label.toLowerCase() === label,
+  )?.logins[0];
+}
+function eventAgentLogin(element: Element): string | undefined {
+  for (const anchor of element.querySelectorAll('a')) {
+    const login = recognizedLogin(anchor);
+    if (login) return login;
+  }
+  return loginForAgentLabel(element.querySelector('strong')?.textContent);
+}
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+function automatedCommentLogin(
+  element: Element,
+  agentReasons: Set<string>,
+): string | undefined {
+  const scripts = element.querySelectorAll(
+    'react-partial script[type="application/json"][data-target="react-partial.embeddedData"]',
+  );
+  for (const script of scripts) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(script.textContent ?? '');
+    } catch {
+      agentReasons.add('An automated review comment payload could not be read.');
+      continue;
+    }
+    if (!isObject(parsed) || !isObject(parsed.props) || !isObject(parsed.props.comment)) {
+      continue;
+    }
+    const { author, automatedComment } = parsed.props.comment;
+    if (!isObject(author) || !isObject(automatedComment)) continue;
+    if (author.login === 'Copilot' && automatedComment.source === 'copilot') {
+      return 'copilot-pull-request-reviewer';
+    }
+  }
+  return undefined;
+}
+function hasHiddenDeferredBody(root: Element): boolean {
+  return root.hasAttribute('data-hidden-comment-ids') ||
+    root.querySelector('include-fragment, [data-deferred-content]') !== null;
+}
+export function extractTimeline(
+  input: Document | readonly Document[],
+  identity: PullRequestIdentity,
+): TimelineExtraction {
+  const threadCandidates: ThreadCandidate[] = [];
+  const responseCandidates: ResponseCandidate[] = [];
+  const reviewRequests: FormalReviewRequestExtraction[] = [];
+  const reviewEvents: ReviewEventExtraction[] = [];
+  const reactions: ReactionExtraction[] = [];
+  const seen = new Map<string, Set<string>>();
   const add = <T extends { id: string }>(kind: string, target: T[], artifact: T, identity = artifact.id) => { const identities = seen.get(kind) ?? new Set<string>(); seen.set(kind, identities); if (!identities.has(identity)) { identities.add(identity); target.push(artifact); } };
-  const addResponse = (kind: ResponseKind, element: Element) => { const identities = responseIdentities(element); const login = actorLogin(element); if (identities.length > 0 && login) responseCandidates.push({ actorLogin: login, identities, kind }); };
-  const nextTimelineFragments: string[] = []; const seenFragments = new Set<string>(); const incompleteReasons = new Set<string>();
+  const agentReasons = new Set<string>(); const reviewThreadReasons = new Set<string>();
+  const addResponse = (kind: ResponseKind, element: Element) => {
+    const identities = responseIdentities(element);
+    const login = actorLogin(element) ?? automatedCommentLogin(element, agentReasons);
+    if (identities.length > 0 && login) responseCandidates.push({ actorLogin: login, identities, kind });
+  };
+  const nextTimelineFragments: string[] = []; const seenFragments = new Set<string>();
   for (const document of documentsFrom(input)) {
     for (const loader of document.querySelectorAll<HTMLElement>('#js-timeline-progressive-loader[data-timeline-item-src]')) { const fragment = loader.getAttribute('data-timeline-item-src'); if (fragment && !seenFragments.has(fragment)) { seenFragments.add(fragment); nextTimelineFragments.push(fragment); } }
-    for (const root of document.querySelectorAll<HTMLElement>(threadRootSelector)) { const identities = threadIdentities(root); const resolved = resolvedState(root); const outdated = outdatedState(root); if (identities.length === 0) incompleteReasons.add('A resolvable review thread had no stable identity.'); else { threadCandidates.push({ identities, outdated, resolved }); if (!resolved.isReadable || !outdated.isReadable) incompleteReasons.add('A resolvable review thread had unreadable resolution or outdated state.'); } for (const element of root.querySelectorAll<HTMLElement>('[id^="discussion_r"], [id^="discussion-diff-"]')) addResponse('inline', element); for (const element of root.querySelectorAll<HTMLElement>('[id^="issuecomment-"]')) addResponse('thread-reply', element); }
+    for (const root of document.querySelectorAll<HTMLElement>(threadRootSelector)) {
+      const identities = threadIdentities(root, identity);
+      const resolved = resolvedState(root);
+      const outdated = outdatedState(root);
+      if (identities.length === 0) {
+        reviewThreadReasons.add('A resolvable review thread had no stable identity.');
+      } else {
+        threadCandidates.push({ identities, outdated, resolved });
+        if (!resolved.isReadable || !outdated.isReadable) {
+          reviewThreadReasons.add('A resolvable review thread had unreadable resolution or outdated state.');
+        }
+      }
+      if (root.hasAttribute('data-deferred-content-url') && hasHiddenDeferredBody(root)) {
+        agentReasons.add('A deferred review thread may hide AI response details.');
+      }
+      for (const element of root.querySelectorAll<HTMLElement>('[id^="discussion_r"], [id^="discussion-diff-"]')) {
+        addResponse('inline', element);
+      }
+      for (const element of root.querySelectorAll<HTMLElement>('[id^="issuecomment-"]')) {
+        addResponse('thread-reply', element);
+      }
+    }
     for (const element of document.querySelectorAll<HTMLElement>('[id^="issuecomment-"]')) { if (!element.closest(threadRootSelector)) addResponse('comment', element); }
     for (const element of document.querySelectorAll<HTMLElement>('[id^="pullrequestreview-"]')) addResponse('review', element);
-    for (const element of document.querySelectorAll<HTMLElement>('[data-review-request-action], [data-review-requested-login], .TimelineItem[id], .TimelineItem[data-gid]')) { const actionValue = element.getAttribute('data-review-request-action')?.toLowerCase(); const text = element.textContent?.replace(/\s+/g, ' ').trim() ?? ''; const action = actionValue === 'removed' ? 'removed' : actionValue === 'requested' ? 'requested' : /\brequested a review from\b/i.test(text) ? 'requested' : /\bremoved review request (?:for|from)\b/i.test(text) ? 'removed' : undefined; const id = stableId(element); const requestedLogin = textLogin(element) ?? actorLogin(element); if (action && id && requestedLogin) add('review-request', reviewRequests, { action, id, requestedLogin }); }
-    for (const element of document.querySelectorAll<HTMLElement>('[data-review-event="started-reviewing"], .TimelineItem[id], .TimelineItem[data-gid]')) { const started = element.getAttribute('data-review-event') === 'started-reviewing' || /\bstarted reviewing\b/i.test(element.textContent?.replace(/\s+/g, ' ').trim() ?? ''); if (!started) continue; const id = stableId(element); const login = actorLogin(element); if (id && login) add('review-event', reviewEvents, { action: 'started-reviewing', actorLogin: login, id }); }
+    for (const element of document.querySelectorAll<HTMLElement>('[id^="discussion_r"], [id^="discussion-diff-"]')) {
+      if (!element.closest(threadRootSelector)) addResponse('inline', element);
+    }
+    for (const element of document.querySelectorAll<HTMLElement>('[data-review-request-action], [data-review-requested-login], .TimelineItem[id^="event-"]')) {
+      const actionValue = element.getAttribute('data-review-request-action')?.toLowerCase();
+      const text = element.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+      const action = actionValue === 'removed'
+        ? 'removed'
+        : actionValue === 'requested'
+          ? 'requested'
+          : /\b(?:requested a review from|AI review requested)\b/i.test(text)
+            ? 'requested'
+            : /\bremoved review request (?:for|from)\b/i.test(text)
+              ? 'removed'
+              : undefined;
+      const id = stableId(element);
+      const requestedLogin = textLogin(element) ?? eventAgentLogin(element);
+      if (action && id && requestedLogin) {
+        add('review-request', reviewRequests, { action, id, requestedLogin });
+      }
+    }
+    for (const element of document.querySelectorAll<HTMLElement>('[data-review-event="started-reviewing"], .TimelineItem[id^="event-"]')) {
+      const started = element.getAttribute('data-review-event') === 'started-reviewing' || /\bstarted reviewing\b/i.test(element.textContent?.replace(/\s+/g, ' ').trim() ?? '');
+      if (!started) continue;
+      const id = stableId(element);
+      const login = actorLogin(element) ?? eventAgentLogin(element);
+      if (id && login) {
+        add('review-event', reviewEvents, { action: 'started-reviewing', actorLogin: login, id });
+      }
+    }
     for (const element of document.querySelectorAll<HTMLElement>('[data-reaction-content="eyes"]')) { const id = stableId(element) ?? element.getAttribute('data-reaction-id') ?? undefined; if (!id) continue; for (const login of actorLogins(element, true)) { const accountLogin = normalizeAgentAccountLogin(login); if (accountLogin) add('reaction', reactions, { actorLogin: login, content: 'eyes', id }, `${id}\0${accountLogin}`); } }
   }
   const currentRequests = new Map<string, Omit<FormalReviewRequestExtraction, 'action'>>();
   for (const request of reviewRequests) { const accountLogin = normalizeAgentAccountLogin(request.requestedLogin); if (!accountLogin) continue; if (request.action === 'removed') currentRequests.delete(accountLogin); else currentRequests.set(accountLogin, { id: request.id, requestedLogin: request.requestedLogin }); }
   const responses = mergeResponseCandidates(responseCandidates);
-  return { artifacts: { comments: responses.comments, currentReviewRequests: [...currentRequests.values()], inlineComments: responses.inlineComments, reactions, reviewEvents, reviewRequests, reviews: responses.reviews, threadReplies: responses.threadReplies }, completeness: incompleteReasons.size > 0 ? { isComplete: false, reasons: [...incompleteReasons] } : { isComplete: true, reasons: [] }, nextTimelineFragments, threads: mergeThreadCandidates(threadCandidates) };
+  return {
+    artifacts: {
+      comments: responses.comments,
+      currentReviewRequests: [...currentRequests.values()],
+      inlineComments: responses.inlineComments,
+      reactions,
+      reviewEvents,
+      reviewRequests,
+      reviews: responses.reviews,
+      threadReplies: responses.threadReplies,
+    },
+    completeness: {
+      agents: agentReasons.size > 0 ? { isComplete: false, reasons: [...agentReasons] } : { isComplete: true, reasons: [] },
+      reviewThreads: reviewThreadReasons.size > 0 ? { isComplete: false, reasons: [...reviewThreadReasons] } : { isComplete: true, reasons: [] },
+    },
+    nextTimelineFragments,
+    threads: mergeThreadCandidates(threadCandidates),
+  };
 }
