@@ -102,7 +102,7 @@ describe('GitHub pull-request data pipeline', () => {
       expect(init).toMatchObject({
         credentials: 'same-origin',
         method: 'GET',
-        redirect: 'error',
+        redirect: 'follow',
       });
     }
   });
@@ -123,6 +123,16 @@ describe('GitHub pull-request data pipeline', () => {
   it('accepts only canonical same-PR focused and legacy timeline URLs', () => {
     expect(isAllowedPullRequestUrl('/octo/demo/pull/42', identity, 'conversation')).toBe(true);
     expect(isAllowedPullRequestUrl('https://github.com/octo/demo/pull/42/files', identity, 'files')).toBe(true);
+    expect(isAllowedPullRequestUrl('https://github.com/octo/demo/pull/42/changes', identity, 'files')).toBe(true);
+    for (const candidate of [
+      'https://github.com/octo/demo/pull/42/changes?diff=split',
+      'https://github.com/octo/demo/pull/42/changes#diff',
+      'https://github.com/octo/demo/pull/43/changes',
+      'https://github.com/other/demo/pull/42/changes',
+      'https://evil.test/octo/demo/pull/42/changes',
+    ]) {
+      expect(isAllowedPullRequestUrl(candidate, identity, 'files')).toBe(false);
+    }
     expect(isAllowedPullRequestUrl(
       'octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42',
       identity,
@@ -180,6 +190,49 @@ describe('GitHub pull-request data pipeline', () => {
     }
   });
 
+  it('follows the same-PR files redirect to changes and parses the diff', async () => {
+    const fetcher = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      const value = String(url);
+      expect(init).toMatchObject({
+        credentials: 'same-origin',
+        method: 'GET',
+        redirect: 'follow',
+      });
+      return value.endsWith('/files')
+        ? response(currentFilesHtml, 'https://github.com/octo/demo/pull/42/changes')
+        : response('<div id="discussion_bucket"></div>', value);
+    });
+
+    const summary = await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(fetcher).toHaveBeenCalledWith(
+      'https://github.com/octo/demo/pull/42/files',
+      expect.objectContaining({ redirect: 'follow' }),
+    );
+    expect(summary.diff).toEqual({
+      data: { additions: 524, deletions: 353, filesChanged: 18 },
+      status: 'ready',
+    });
+  });
+
+  it('rejects a followed files redirect to GitHub login', async () => {
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      const value = String(url);
+      return value.endsWith('/files')
+        ? response(currentFilesHtml, 'https://github.com/login?return_to=%2Focto%2Fdemo%2Fpull%2F42%2Ffiles')
+        : response('<div id="discussion_bucket"></div>', value);
+    });
+
+    const summary = await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(summary.diff).toEqual({
+      message: 'GitHub redirected to an untrusted URL.',
+      status: 'error',
+    });
+    expect(summary.reviewThreads.status).toBe('ready');
+    expect(summary.agents.status).toBe('ready');
+  });
+
   it('follows a focused timeline fragment with its original cursor encoding and rejects an ID mismatch', async () => {
     const mismatchedNextFragment = `${currentTimelineFragmentHtml}<div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/timeline_focused_item?after_cursor=Later&id=PR_other"></div>`;
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
@@ -198,7 +251,7 @@ describe('GitHub pull-request data pipeline', () => {
       expect.objectContaining({
         credentials: 'same-origin',
         method: 'GET',
-        redirect: 'error',
+        redirect: 'follow',
       }),
     );
     expect(fetcher).not.toHaveBeenCalledWith(
@@ -295,7 +348,7 @@ describe('GitHub pull-request data pipeline', () => {
   it('uses a credentialed GET with the caller abort signal and rejects redirected cross-origin content', async () => {
     const signal = new AbortController().signal;
     const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
-      expect(init).toMatchObject({ credentials: 'same-origin', method: 'GET', redirect: 'error', signal });
+      expect(init).toMatchObject({ credentials: 'same-origin', method: 'GET', redirect: 'follow', signal });
       return response(timelineHtml, 'https://evil.test/octo/demo/pull/42');
     });
 

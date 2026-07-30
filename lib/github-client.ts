@@ -149,7 +149,13 @@ export function isAllowedPullRequestUrl(
   const base = pullRequestPath(identity);
   const sameConversationPath = url.pathname.toLowerCase() === base.toLowerCase();
   if (kind === 'conversation') return sameConversationPath && !url.search && !url.hash;
-  if (kind === 'files') return url.pathname.toLowerCase() === `${base}/files`.toLowerCase() && !url.search && !url.hash;
+  if (kind === 'files') {
+    const path = url.pathname.toLowerCase();
+    return (
+      path === `${base}/files`.toLowerCase()
+      || path === `${base}/changes`.toLowerCase()
+    ) && !url.search && !url.hash;
+  }
 
   return Boolean(normalizeTimelineFragment(candidate, identity));
 }
@@ -234,7 +240,7 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
       const response = await fetcher(target, {
         credentials: 'same-origin',
         method: 'GET',
-        redirect: 'error',
+        redirect: 'follow',
         signal,
       });
       const finalUrl = response.url || target;
