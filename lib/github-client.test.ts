@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import diffAggregateHtml from '../test/fixtures/github/diff-aggregate.html?raw';
 import diffRenderedPartialHtml from '../test/fixtures/github/diff-rendered-partial.html?raw';
 import timelineHtml from '../test/fixtures/github/timeline.html?raw';
+import currentPrListHtml from '../test/fixtures/github/current/pr-list.html?raw';
 import currentConversationHtml from '../test/fixtures/github/current/conversation.html?raw';
 import currentFilesHtml from '../test/fixtures/github/current/files.html?raw';
 import currentTimelineFragmentHtml from '../test/fixtures/github/current/timeline-fragment.html?raw';
@@ -13,6 +14,7 @@ import {
   isValidPullRequestIdentity,
   isAllowedPullRequestUrl,
 } from './github-client';
+import { extractPullRequestRows } from './github-dom';
 
 const identity = { number: 42, owner: 'octo', repository: 'demo' };
 const documentFor = (html: string) => new DOMParser().parseFromString(html, 'text/html');
@@ -46,6 +48,56 @@ function clientFor(
 }
 
 describe('GitHub pull-request data pipeline', () => {
+  it('summarizes the committed current fixture set with exact requests', async () => {
+    const fixtureResponses = new Map([
+      ['https://github.com/octo/demo/pull/42', currentConversationHtml],
+      ['https://github.com/octo/demo/pull/42/files', currentFilesHtml],
+      ['https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42', currentTimelineFragmentHtml],
+    ]);
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      const value = String(url);
+      const fixture = fixtureResponses.get(value);
+      if (!fixture) throw new Error(`Unexpected fixture request: ${value}`);
+      return response(fixture, value);
+    });
+
+    const nativeComments = extractPullRequestRows(documentFor(currentPrListHtml)).find(
+      (row) => row.identity.number === identity.number,
+    )?.nativeComments;
+    const summary = await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(nativeComments).toEqual({
+      count: 2,
+      href: '/octo/demo/pull/42#comments',
+      status: 'ready',
+    });
+    expect(summary).toEqual({
+      agents: {
+        data: [{
+          agentId: 'copilot',
+          requestSources: ['formal-review-request', 'started-reviewing'],
+          responseCount: 1,
+          state: 'responded',
+        }],
+        reason: 'A deferred review thread may hide AI response details.',
+        status: 'partial',
+      },
+      diff: {
+        data: { additions: 524, deletions: 353, filesChanged: 18 },
+        status: 'ready',
+      },
+      reviewThreads: {
+        data: { resolvedOrOutdated: 1, total: 1, unresolved: 0 },
+        status: 'ready',
+      },
+    });
+    expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+      'https://github.com/octo/demo/pull/42',
+      'https://github.com/octo/demo/pull/42/files',
+      'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42',
+    ]);
+  });
+
   it('accepts valid leading-dot repository names without weakening owner validation', () => {
     expect(isValidPullRequestIdentity({
       number: 1,

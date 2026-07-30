@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import currentPrListHtml from '../test/fixtures/github/current/pr-list.html?raw';
 import currentFilesHtml from '../test/fixtures/github/current/files.html?raw';
 import currentFilesNoAggregateHtml from '../test/fixtures/github/current/files-no-aggregate.html?raw';
 import currentAutomatedCommentHtml from '../test/fixtures/github/current/automated-comment.html?raw';
@@ -24,6 +25,14 @@ const extractTimeline = (
 ) => extractTimelineWithIdentity(input, identity);
 
 describe('extractPullRequestRows', () => {
+  it('extracts the documented native comments from the current fixture', () => {
+    expect(extractPullRequestRows(parse(currentPrListHtml))[0]?.nativeComments).toEqual({
+      count: 2,
+      href: '/octo/demo/pull/42#comments',
+      status: 'ready',
+    });
+  });
+
   it('extracts a single row with a caller-supplied viewer login', () => {
     const document = parse(prListHtml);
     const row = document.querySelector<HTMLElement>('#issue_9001')!;
