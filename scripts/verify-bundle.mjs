@@ -1,5 +1,5 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { join, relative, sep } from 'node:path';
+import { lstat, readdir, readFile } from 'node:fs/promises';
+import { join, posix, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const ALLOWED_FILES = [
@@ -12,76 +12,200 @@ const ALLOWED_FILES = [
   'manifest.json',
 ];
 const ALLOWED_FILE_SET = new Set(ALLOWED_FILES);
+const ALLOWED_DIRECTORIES = new Set(['content-scripts', 'icon']);
 const CONTENT_SCRIPT_FILE = 'content-scripts/content.js';
 const MAX_CONTENT_SCRIPT_BYTES = 250_000;
 const MAX_BUNDLE_BYTES = 270_000;
 
 function normalizeFilePath(file) {
-  return file.replaceAll('\\', '/').replace(/^\.\/+/, '');
+  return posix.normalize(file.replaceAll('\\', '/')).replace(/^(?:\.\/)+/, '');
 }
 
-function byteLength(value) {
-  if (typeof value === 'string') return Buffer.byteLength(value);
-  if (value && typeof value.byteLength === 'number') return value.byteLength;
-  return 0;
+function isContentScriptPayload(value) {
+  return typeof value === 'string' || Buffer.isBuffer(value) || value instanceof Uint8Array;
 }
 
-export function validateBundle({ files, contentScript, sizes }) {
+function contentScriptByteLength(value) {
+  return typeof value === 'string' ? Buffer.byteLength(value) : value.byteLength;
+}
+
+function plural(count, singular, pluralForm = `${singular}s`) {
+  return count === 1 ? singular : pluralForm;
+}
+
+export function validateBundle(input) {
+  const { files, contentScript, sizes } = input && typeof input === 'object' ? input : {};
   const errors = [];
-  const normalizedFiles = files.map(normalizeFilePath).sort();
-  const fileSet = new Set(normalizedFiles);
+  const fileValues = Array.isArray(files) ? files : [];
+  const sizeValues = Array.isArray(sizes) ? sizes : [];
 
-  for (const file of normalizedFiles) {
-    if (!ALLOWED_FILE_SET.has(file)) errors.push(`Unexpected bundle file: ${file}`);
+  if (!Array.isArray(files)) errors.push('Bundle files must be an array');
+  if (!Array.isArray(sizes)) errors.push('Bundle sizes must be an array');
+
+  const normalizedFiles = [];
+  fileValues.forEach((file, index) => {
+    if (typeof file !== 'string') {
+      errors.push(`Invalid bundle file at index ${index}: expected a string`);
+      return;
+    }
+    normalizedFiles.push({ index, path: normalizeFilePath(file) });
+  });
+
+  const paths = normalizedFiles.map(({ path }) => path).sort();
+  const fileCounts = new Map();
+  for (const path of paths) fileCounts.set(path, (fileCounts.get(path) ?? 0) + 1);
+  for (const path of [...fileCounts.keys()].sort()) {
+    if (fileCounts.get(path) > 1) errors.push(`Duplicate bundle file: ${path}`);
   }
+  for (const path of paths) {
+    if (!ALLOWED_FILE_SET.has(path)) errors.push(`Unexpected bundle file: ${path}`);
+  }
+
+  const fileSet = new Set(paths);
   for (const file of ALLOWED_FILES) {
     if (!fileSet.has(file)) errors.push(`Missing bundle file: ${file}`);
   }
 
-  const contentScriptBytes = byteLength(contentScript);
-  if (contentScriptBytes > MAX_CONTENT_SCRIPT_BYTES) {
-    errors.push(`Content script exceeds ${MAX_CONTENT_SCRIPT_BYTES} bytes: ${contentScriptBytes}`);
+  const hasSizes = Array.isArray(sizes);
+  const hasMatchingSizeCount = hasSizes && sizeValues.length === fileValues.length;
+  if (hasSizes && !hasMatchingSizeCount) {
+    errors.push(`Expected one size per bundle file: received ${sizeValues.length} ${plural(sizeValues.length, 'size')} for ${fileValues.length} ${plural(fileValues.length, 'file')}`);
   }
 
-  const totalBytes = sizes.reduce((total, size) => total + size, 0);
-  if (totalBytes > MAX_BUNDLE_BYTES) {
-    errors.push(`Chrome bundle exceeds ${MAX_BUNDLE_BYTES} bytes: ${totalBytes}`);
+  const validSizes = sizeValues.map((size, index) => {
+    const valid = Number.isSafeInteger(size) && size >= 0;
+    if (!valid) errors.push(`Invalid bundle size at index ${index}: expected a non-negative safe integer`);
+    return valid;
+  });
+
+  const validContentScript = isContentScriptPayload(contentScript);
+  if (!validContentScript) {
+    errors.push('Content script must be a string, Buffer, or Uint8Array');
+  }
+
+  const actualContentScriptSize = validContentScript ? contentScriptByteLength(contentScript) : 0;
+  if (validContentScript && actualContentScriptSize > MAX_CONTENT_SCRIPT_BYTES) {
+    errors.push(`Content script exceeds ${MAX_CONTENT_SCRIPT_BYTES} bytes: ${actualContentScriptSize}`);
+  }
+
+  const contentScriptEntries = normalizedFiles.filter(({ path }) => path === CONTENT_SCRIPT_FILE);
+  if (validContentScript && hasMatchingSizeCount && validSizes.every(Boolean) && contentScriptEntries.length === 1) {
+    const recordedSize = sizeValues[contentScriptEntries[0].index];
+    if (recordedSize !== actualContentScriptSize) {
+      errors.push(`Content script size does not match payload: recorded ${recordedSize}, actual ${actualContentScriptSize}`);
+    }
+  }
+
+  if (hasMatchingSizeCount && validSizes.every(Boolean)) {
+    let totalBytes = 0;
+    for (const size of sizeValues) {
+      if (totalBytes > Number.MAX_SAFE_INTEGER - size) {
+        errors.push('Chrome bundle size total must be a safe integer');
+        break;
+      }
+      totalBytes += size;
+    }
+    if (Number.isSafeInteger(totalBytes) && totalBytes > MAX_BUNDLE_BYTES) {
+      errors.push(`Chrome bundle exceeds ${MAX_BUNDLE_BYTES} bytes: ${totalBytes}`);
+    }
   }
 
   return errors;
 }
 
-async function collectFiles(bundlePath) {
-  const files = [];
+function relativeBundlePath(bundlePath, filePath) {
+  return normalizeFilePath(relative(bundlePath, filePath).split(sep).join('/'));
+}
 
-  async function visit(directory) {
-    const entries = await readdir(directory, { withFileTypes: true });
+function filesystemError(action, filePath, error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return `${action}: ${filePath}: ${message}`;
+}
+
+async function scanBundle(bundlePath) {
+  const errors = [];
+  const records = [];
+
+  const rootMetadata = await lstat(bundlePath);
+  if (rootMetadata.isSymbolicLink()) {
+    return { errors: [`Bundle root must not be a symbolic link: ${bundlePath}`], records };
+  }
+  if (!rootMetadata.isDirectory()) {
+    return { errors: [`Bundle root is not a directory: ${bundlePath}`], records };
+  }
+
+  async function scanDirectory(directory, directoryPath) {
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      errors.push(filesystemError('Unable to read bundle directory', directoryPath || '.', error));
+      return;
+    }
+
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
       const filePath = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        await visit(filePath);
-      } else if (entry.isFile()) {
-        files.push(filePath);
+      const path = relativeBundlePath(bundlePath, filePath);
+      let metadata;
+      try {
+        metadata = await lstat(filePath);
+      } catch (error) {
+        errors.push(filesystemError('Unable to inspect bundle entry', path, error));
+        continue;
+      }
+
+      if (metadata.isSymbolicLink()) {
+        errors.push(`Unsupported bundle filesystem entry: ${path} (symbolic link)`);
+      } else if (metadata.isDirectory()) {
+        if (!directoryPath && ALLOWED_DIRECTORIES.has(entry.name)) {
+          await scanDirectory(filePath, path);
+        } else {
+          errors.push(`Unexpected bundle directory: ${path}`);
+        }
+      } else if (metadata.isFile()) {
+        records.push({ path, filePath });
+      } else {
+        errors.push(`Unsupported bundle filesystem entry: ${path} (special file)`);
       }
     }
   }
 
-  await visit(bundlePath);
-  return files;
+  await scanDirectory(bundlePath, '');
+  return { errors, records: records.sort((left, right) => left.path.localeCompare(right.path)) };
+}
+
+async function readBundleFiles(records) {
+  const errors = [];
+  const files = [];
+  const sizes = [];
+  let contentScript = Buffer.alloc(0);
+
+  for (const record of records) {
+    try {
+      const metadata = await lstat(record.filePath);
+      if (!metadata.isFile() || metadata.isSymbolicLink()) {
+        errors.push(`Unsupported bundle filesystem entry: ${record.path} (not a regular file)`);
+        continue;
+      }
+      const content = await readFile(record.filePath);
+      files.push(record.path);
+      sizes.push(content.byteLength);
+      if (record.path === CONTENT_SCRIPT_FILE) contentScript = content;
+    } catch (error) {
+      errors.push(filesystemError('Unable to read bundle file', record.path, error));
+    }
+  }
+
+  return { contentScript, errors, files, sizes };
 }
 
 async function main() {
   const bundlePath = process.argv[2] ?? '.output/chrome-mv3';
 
   try {
-    const paths = await collectFiles(bundlePath);
-    const files = paths.map((filePath) => normalizeFilePath(relative(bundlePath, filePath).split(sep).join('/')));
-    const sizes = await Promise.all(paths.map(async (filePath) => (await stat(filePath)).size));
-    const contentScriptPath = paths.find(
-      (filePath) => normalizeFilePath(relative(bundlePath, filePath).split(sep).join('/')) === CONTENT_SCRIPT_FILE,
-    );
-    const contentScript = contentScriptPath ? await readFile(contentScriptPath) : Buffer.alloc(0);
-    const errors = validateBundle({ files, contentScript, sizes });
+    const scan = await scanBundle(bundlePath);
+    const bundle = await readBundleFiles(scan.records);
+    const errors = [...scan.errors, ...bundle.errors, ...validateBundle(bundle)];
 
     if (errors.length > 0) {
       process.stderr.write(`${errors.map((error) => `- ${error}`).join('\n')}\n`);
