@@ -1,0 +1,184 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+
+import { chromium, expect, test as base, type Page } from '@playwright/test';
+
+const fixtureDirectory = path.resolve('test/fixtures/github/current');
+
+export const urls = {
+  prList: 'https://github.com/octo/demo/pulls',
+  conversation: 'https://github.com/octo/demo/pull/42',
+  files: 'https://github.com/octo/demo/pull/42/files',
+  timeline: 'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42',
+} as const;
+
+interface Diagnostics {
+  consoleErrors: string[];
+  contentScriptCssRequests: string[];
+  pageErrors: string[];
+  requestFailures: string[];
+  unexpectedRequests: string[];
+}
+
+interface ExtensionHarness {
+  currentRowHtml: string;
+  expectNoFailures(): Promise<void>;
+  installHostilePageCss(): Promise<void>;
+  nativeCounterStatesAtHostMount(): Promise<boolean[]>;
+  page: Page;
+  recordNativeCounterAtHostMount(): Promise<void>;
+  urls: typeof urls;
+}
+
+function currentRow(html: string): string {
+  const start = html.indexOf('<div id="issue_42"');
+  const nextRow = html.indexOf('<div id="issue_43"');
+  if (start === -1 || nextRow === -1) throw new Error('The current PR-list fixture no longer contains its focused rows.');
+  return html.slice(start, nextRow).trim();
+}
+
+async function readFixtures() {
+  const [prList, conversation, files, timeline] = await Promise.all([
+    readFile(path.join(fixtureDirectory, 'pr-list.html'), 'utf8'),
+    readFile(path.join(fixtureDirectory, 'conversation.html'), 'utf8'),
+    readFile(path.join(fixtureDirectory, 'files.html'), 'utf8'),
+    readFile(path.join(fixtureDirectory, 'timeline-fragment.html'), 'utf8'),
+  ]);
+  return { conversation, files, prList, timeline };
+}
+
+function messageForConsole(type: string, text: string): string {
+  return `${type}: ${text}`;
+}
+
+export const test = base.extend<{ extension: ExtensionHarness }>({
+  extension: async ({}, use) => {
+    const fixtures = await readFixtures();
+    const responses = new Map<string, string>([
+      [urls.prList, fixtures.prList],
+      [urls.conversation, fixtures.conversation],
+      [urls.files, fixtures.files],
+      [urls.timeline, fixtures.timeline],
+    ]);
+    const diagnostics: Diagnostics = {
+      consoleErrors: [],
+      contentScriptCssRequests: [],
+      pageErrors: [],
+      requestFailures: [],
+      unexpectedRequests: [],
+    };
+    const pendingRoutes = new Set<Promise<void>>();
+    const extensionPath = path.resolve('.output/chrome-mv3');
+    const context = await chromium.launchPersistentContext('', {
+      channel: 'chromium',
+      headless: true,
+      args: [
+        `--disable-extensions-except=${extensionPath}`,
+        `--load-extension=${extensionPath}`,
+      ],
+      bypassCSP: false,
+    });
+
+    try {
+      await context.route('https://github.com/**', async (route) => {
+        let settleRoute: (() => void) | undefined;
+        const settled = new Promise<void>((resolve) => { settleRoute = resolve; });
+        pendingRoutes.add(settled);
+        try {
+          const request = route.request();
+          const body = responses.get(request.url());
+          if (request.method() !== 'GET' || body === undefined) {
+            diagnostics.unexpectedRequests.push(`${request.method()} ${request.url()}`);
+            await route.abort('blockedbyclient');
+            return;
+          }
+          await route.fulfill({
+            body,
+            contentType: 'text/html; charset=utf-8',
+            headers: request.url() === urls.prList
+              ? { 'Content-Security-Policy': "default-src 'none'; style-src 'none'; img-src 'none'" }
+              : undefined,
+          });
+        } finally {
+          pendingRoutes.delete(settled);
+          settleRoute!();
+        }
+      });
+      context.on('request', (request) => {
+        if (new URL(request.url()).pathname.endsWith('/content-scripts/content.css')) {
+          diagnostics.contentScriptCssRequests.push(request.url());
+        }
+      });
+
+      const page = await context.newPage();
+      page.on('pageerror', (error) => diagnostics.pageErrors.push(error.message));
+      page.on('console', (message) => {
+        if (message.type() === 'error') diagnostics.consoleErrors.push(messageForConsole(message.type(), message.text()));
+      });
+      page.on('requestfailed', (request) => {
+        diagnostics.requestFailures.push(`${request.method()} ${request.url()} ${request.failure()?.errorText ?? ''}`.trim());
+      });
+      await page.addInitScript(() => {
+        const removeUnservedFixtureRows = () => document.querySelector('#issue_43')?.remove();
+        new MutationObserver(removeUnservedFixtureRows).observe(document, { childList: true, subtree: true });
+        removeUnservedFixtureRows();
+      });
+
+      await use({
+        currentRowHtml: currentRow(fixtures.prList),
+        async expectNoFailures() {
+          await Promise.all([...pendingRoutes]);
+          await page.evaluate(() => new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          ));
+          expect(diagnostics.pageErrors, `page errors: ${diagnostics.pageErrors.join('\n')}`).toEqual([]);
+          expect(diagnostics.consoleErrors, `console errors: ${diagnostics.consoleErrors.join('\n')}`).toEqual([]);
+          expect(diagnostics.requestFailures, `request failures: ${diagnostics.requestFailures.join('\n')}`).toEqual([]);
+          expect(diagnostics.unexpectedRequests, `unexpected requests: ${diagnostics.unexpectedRequests.join('\n')}`).toEqual([]);
+          expect(diagnostics.contentScriptCssRequests, `content stylesheet requests: ${diagnostics.contentScriptCssRequests.join('\n')}`).toEqual([]);
+        },
+        async installHostilePageCss() {
+          const session = await context.newCDPSession(page);
+          try {
+            await session.send('DOM.enable');
+            await session.send('CSS.enable');
+            const frameTree = await session.send('Page.getFrameTree');
+            const sheet = await session.send('CSS.createStyleSheet', { frameId: frameTree.frameTree.frame.id });
+            await session.send('CSS.setStyleSheetText', {
+              styleSheetId: sheet.styleSheetId,
+              text: 'a { color: rgb(255, 0, 0) !important; font-size: 40px !important; }',
+            });
+          } finally {
+            await session.detach();
+          }
+        },
+        async nativeCounterStatesAtHostMount() {
+          return page.evaluate(() => (window as Window & { __prOverviewCounterStates?: boolean[] }).__prOverviewCounterStates ?? []);
+        },
+        page,
+        async recordNativeCounterAtHostMount() {
+          await page.addInitScript(() => {
+            const trackedWindow = window as Window & { __prOverviewCounterStates?: boolean[] };
+            trackedWindow.__prOverviewCounterStates = [];
+            const inspectAddedNodes = (records: MutationRecord[]) => {
+              for (const record of records) {
+                for (const node of record.addedNodes) {
+                  if (!(node instanceof HTMLElement) || node.localName !== 'github-pr-overview') continue;
+                  const row = node.closest('#issue_42');
+                  const counter = row?.querySelector<HTMLAnchorElement>('a[aria-label="2 comments"]');
+                  if (counter) trackedWindow.__prOverviewCounterStates!.push(counter.hidden);
+                }
+              }
+            };
+            new MutationObserver(inspectAddedNodes).observe(document, { childList: true, subtree: true });
+          });
+        },
+        urls,
+      });
+    } finally {
+      await context.close();
+    }
+  },
+});
+
+export { expect };
