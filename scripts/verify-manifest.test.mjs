@@ -43,6 +43,45 @@ describe('validateManifest', () => {
     expect(validateManifest({ ...expectedManifest, [field]: [] })).toContain(`Unexpected manifest field: ${field}`);
   });
 
+  it.each([
+    'css',
+    'exclude_matches',
+    'include_globs',
+    'exclude_globs',
+    'match_about_blank',
+    'match_origin_as_fallback',
+    'unexpected',
+  ])('rejects the unnecessary content_scripts[0].%s field', (field) => {
+    expect(validateManifest({
+      ...expectedManifest,
+      content_scripts: [{ ...expectedManifest.content_scripts[0], [field]: [] }],
+    })).toEqual([`Unexpected content_scripts[0] field: ${field}`]);
+  });
+
+  it.each(['all_frames', 'js', 'matches', 'run_at', 'world'])(
+    'reports a missing content_scripts[0].%s field',
+    (field) => {
+      const { [field]: omitted, ...contentScript } = expectedManifest.content_scripts[0];
+
+      expect(validateManifest({
+        ...expectedManifest,
+        content_scripts: [contentScript],
+      })).toContain(`Missing content_scripts[0] field: ${field}`);
+    },
+  );
+
+  it.each([
+    null,
+    [],
+    'content-scripts/content.js',
+    new (class ContentScript {})(),
+  ])('rejects a non-plain content_scripts[0] entry', (contentScript) => {
+    expect(validateManifest({
+      ...expectedManifest,
+      content_scripts: [contentScript],
+    })).toEqual(['content_scripts[0] must be a plain object']);
+  });
+
   it('rejects extra content scripts and broader match patterns', () => {
     const broadContentScript = {
       ...expectedManifest.content_scripts[0],

@@ -18,11 +18,24 @@ const ALLOWED_FIELDS = new Set([
   'name',
   'version',
 ]);
+const CONTENT_SCRIPT_FIELDS = new Set([
+  'all_frames',
+  'js',
+  'matches',
+  'run_at',
+  'world',
+]);
 
 function equals(value, expected) {
   return Array.isArray(value)
     && value.length === expected.length
     && value.every((item, index) => item === expected[index]);
+}
+
+function isPlainObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 export function validateManifest(manifest) {
@@ -51,11 +64,28 @@ export function validateManifest(manifest) {
   const contentScripts = Array.isArray(manifest.content_scripts) ? manifest.content_scripts : [];
   if (contentScripts.length !== 1) errors.push('Expected exactly one content script');
 
-  const matches = contentScripts.flatMap((contentScript) => Array.isArray(contentScript?.matches) ? contentScript.matches : []);
-  if (!equals(matches, [EXPECTED_MATCH])) errors.push(`Content script matches must be exactly ${EXPECTED_MATCH}`);
-
   const contentScript = contentScripts[0];
-  if (contentScript) {
+  const invalidSoleContentScript = contentScripts.length === 1 && !isPlainObject(contentScript);
+  if (invalidSoleContentScript) {
+    errors.push('content_scripts[0] must be a plain object');
+  }
+
+  if (!invalidSoleContentScript) {
+    const matches = contentScripts.flatMap((entry) => Array.isArray(entry?.matches) ? entry.matches : []);
+    if (!equals(matches, [EXPECTED_MATCH])) errors.push(`Content script matches must be exactly ${EXPECTED_MATCH}`);
+  }
+
+  if (isPlainObject(contentScript)) {
+    for (const field of Object.keys(contentScript).sort()) {
+      if (!CONTENT_SCRIPT_FIELDS.has(field)) {
+        errors.push(`Unexpected content_scripts[0] field: ${field}`);
+      }
+    }
+    for (const field of CONTENT_SCRIPT_FIELDS) {
+      if (!(field in contentScript)) {
+        errors.push(`Missing content_scripts[0] field: ${field}`);
+      }
+    }
     if (!equals(contentScript.js, ['content-scripts/content.js'])) {
       errors.push('Content script must contain only content-scripts/content.js');
     }
