@@ -84,7 +84,17 @@ function Agents({ section }: { section: PullRequestSummary['agents'] }) {
 }
 
 export function PullRequestCard({ conversationHref, filesHref, summary }: PullRequestCardProps) {
-  return <div className={`pr-overview-card${summary.authoredByViewer ? ' authored' : ''}`} data-testid="pr-card" role="group" aria-label="Pull request review overview">
+  const busy = [
+    summary.totalComments,
+    summary.reviewThreads,
+    summary.diff,
+    summary.agents,
+  ].some((section) => section.status === 'loading');
+
+  return <div className={`pr-overview-card${summary.authoredByViewer ? ' authored' : ''}`} data-testid="pr-card" role="group" aria-label="Pull request review overview" aria-busy={busy}>
+    <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+      {busy ? 'Loading pull request overview.' : 'Pull request overview updated.'}
+    </span>
     {summary.authoredByViewer && <span className="sr-only">Authored by you</span>}
     <TotalComments section={summary.totalComments} fallbackHref={conversationHref} />
     <ReviewThreads section={summary.reviewThreads} href={conversationHref} />

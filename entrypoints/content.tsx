@@ -7,7 +7,6 @@ import { CARD_STYLES, PullRequestCard } from '../lib/pr-card';
 
 export default defineContentScript({
   allFrames: false,
-  cssInjectionMode: 'ui',
   matches: ['https://github.com/*/*/pulls*'],
   runAt: 'document_idle',
   world: 'ISOLATED',
