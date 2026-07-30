@@ -128,7 +128,7 @@ class RowController {
       return;
     }
     Promise.resolve(mounting).then((mounted) => {
-      if (this.disposed) { mounted.remove(); return; }
+      if (this.disposed || !this.ownsConnectedMountAnchor()) { mounted.remove(); return; }
       this.mounted = mounted;
       this.hideCurrentNativeCounter();
       this.setAuthoredAttribute();
@@ -155,17 +155,32 @@ class RowController {
     const title = findPullRequestTitle(this.row)?.anchor;
     const openedBy = this.row.querySelector('.opened-by');
     const metadata = openedBy?.parentElement;
-    if (title && metadata && metadata !== this.row && metadata.parentElement === title.parentElement) {
+    const mainContent = title?.closest<HTMLElement>('.flex-auto.min-width-0, .flex-auto, .min-width-0');
+    if (title && metadata && metadata !== this.row && mainContent?.contains(metadata) && this.safeMountContainer(metadata, title)) {
       metadata.after(anchor);
-    } else if (openedBy) {
+    } else if (openedBy && this.safeMountContainer(openedBy.parentElement, title)) {
       openedBy.after(anchor);
     } else {
       const rowEnd = this.row.querySelector('.comment-area, [data-testid="issue-row-end"], .js-issue-meta, .js-issue-row-meta');
-      if (rowEnd) rowEnd.append(anchor);
-      else if (title?.parentElement) title.parentElement.append(anchor);
+      if (this.safeMountContainer(rowEnd, title)) rowEnd!.append(anchor);
+      else if (this.safeMountContainer(title?.parentElement, title)) title!.parentElement!.append(anchor);
+      else if (this.safeMountContainer(mainContent, title)) mainContent!.append(anchor);
       else this.row.append(anchor);
     }
     return anchor;
+  }
+
+  private safeMountContainer(container: Element | null | undefined, title: HTMLAnchorElement | undefined): container is HTMLElement {
+    if (!container || !(container instanceof HTMLElement)) return false;
+    return this.row.contains(container) &&
+      !container.matches('a, .opened-by, .hide-sm') &&
+      !container.closest('a, .opened-by, .hide-sm') &&
+      !(title && (container === title || title.contains(container)));
+  }
+
+  private ownsConnectedMountAnchor(): boolean {
+    return this.mountAnchor.isConnected &&
+      this.mountAnchor.closest<HTMLElement>('[id^="issue_"].js-issue-row') === this.row;
   }
 
   private snapshot(element: Element): AttributeSnapshot {
@@ -232,7 +247,7 @@ class RowController {
   matches(extraction: PullRequestRowExtraction): boolean {
     return !this.disposed &&
       identityKey(extraction.identity) === identityKey(this.currentExtraction.identity) &&
-      this.row.contains(this.mountAnchor);
+      this.ownsConnectedMountAnchor();
   }
 
   refresh(extraction: PullRequestRowExtraction, nativeDirty: boolean): void {
@@ -317,8 +332,9 @@ export function createPageReconciler(options: PageReconcilerOptions) {
       queueReconcile();
     });
     observer.observe(options.document, {
-      attributeFilter: ['aria-label', 'content', 'data-hovercard-type', 'data-login', 'href'],
+      attributeFilter: ['aria-label', 'class', 'content', 'data-comment-count', 'data-hovercard-type', 'data-login', 'href', 'role'],
       attributes: true,
+      characterData: true,
       childList: true,
       subtree: true,
     });
@@ -327,6 +343,7 @@ export function createPageReconciler(options: PageReconcilerOptions) {
     currentEpoch += 1;
     for (const controller of controllers.values()) controller.dispose();
     controllers.clear();
+    nativeDirtyRows.clear();
   };
   const reconcile = () => {
     observe();
@@ -343,11 +360,12 @@ export function createPageReconciler(options: PageReconcilerOptions) {
     const found = new Set(rows);
     for (const [row, controller] of controllers) {
       const extraction = row.isConnected ? extractions.get(row) : undefined;
+      const nativeDirty = nativeDirtyRows.delete(row);
       if (!found.has(row) || !extraction || !controller.matches(extraction)) {
         controller.dispose();
         controllers.delete(row);
       } else {
-        controller.refresh(extraction, nativeDirtyRows.delete(row));
+        controller.refresh(extraction, nativeDirty);
       }
     }
     for (const row of rows) {
@@ -356,6 +374,7 @@ export function createPageReconciler(options: PageReconcilerOptions) {
       if (!extraction) continue;
       controllers.set(row, new RowController(options.document, row, extraction, options.client, options.uiFactory, () => currentEpoch, currentEpoch, options.IntersectionObserver));
     }
+    nativeDirtyRows.clear();
   };
   return {
     cleanup() { stopped = true; observer?.disconnect(); observer = undefined; clear(); },

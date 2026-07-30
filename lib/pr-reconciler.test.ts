@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import currentPrListHtml from '../test/fixtures/github/current/pr-list.html?raw';
 import type { PullRequestRemoteSummary } from './github-client';
-import { createPageReconciler, isPullRequestListRoute, type ObserverConstructor } from './pr-reconciler';
+import { createPageReconciler, isPullRequestListRoute, type CardProps, type ObserverConstructor } from './pr-reconciler';
 
 const remote: PullRequestRemoteSummary = {
   agents: { data: [], status: 'ready' },
@@ -19,6 +19,10 @@ function page(body: string, url = 'https://github.com/octo/demo/pulls') {
 
 function row(number = 42, counter = '<a class="comments-link" aria-label="23 comments" href="/octo/demo/pull/42#issuecomment-23">23</a>') {
   return `<div id="issue_${number}" class="js-issue-row"><a class="Link--primary" href="/octo/demo/pull/${number}">A realistic pull request</a><span class="opened-by"><a data-hovercard-type="user">octo-author</a></span><span class="comment-area">${counter}</span></div>`;
+}
+
+function recognitionRow(counter: string) {
+  return `<div id="issue_42" class="js-issue-row"><a class="Link--primary" href="/octo/demo/pull/42">A realistic pull request</a><span class="opened-by"><a data-hovercard-type="user">octo-author</a></span>${counter}</div>`;
 }
 
 function snapshotAttributes(element: Element) {
@@ -72,6 +76,72 @@ describe('page reconciler', () => {
       expect(row.querySelector('.opened-by')!.contains(marker)).toBe(false);
       expect(marker.getAttribute('aria-hidden')).toBe('true');
     }
+    reconciler.cleanup();
+  });
+
+  it('places fallback markers in shared visible main content without nesting inside anchors or metadata', async () => {
+    const document = page(`
+      <div id="issue_42" class="js-issue-row">
+        <div class="d-flex position-relative">
+          <div class="flex-auto min-width-0 p-2">
+            <div class="title-wrap"><a class="Link--primary" href="/octo/demo/pull/42">Nested title</a></div>
+            <div class="metadata-wrap"><span class="opened-by">opened by <a data-hovercard-type="user">author</a></span></div>
+          </div>
+          <div class="hide-sm"><a aria-label="2 comments" href="/octo/demo/pull/42#comments">2</a></div>
+        </div>
+      </div>
+      <div id="issue_43" class="js-issue-row">
+        <div class="d-flex position-relative">
+          <div class="flex-auto min-width-0 p-2">
+            <a class="Link--primary" href="/octo/demo/pull/43">Anchor fallback</a>
+            <a class="comment-area" aria-label="3 comments" href="/octo/demo/pull/43#comments">3</a>
+          </div>
+        </div>
+      </div>
+    `);
+    const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));
+    const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount } });
+
+    reconciler.reconcile();
+    await vi.waitFor(() => expect(mount).toHaveBeenCalledTimes(2));
+
+    for (const row of document.querySelectorAll<HTMLElement>('[id^="issue_"].js-issue-row')) {
+      const marker = row.querySelector('[data-pr-overview-mount-anchor]')!;
+      expect(marker.parentElement).toBe(row.querySelector('.flex-auto.min-width-0'));
+      expect(marker.closest('.opened-by, .hide-sm, a')).toBeNull();
+      expect(row.querySelector('.Link--primary')!.contains(marker)).toBe(false);
+      expect(row.querySelector('[aria-label$="comments"]')!.contains(marker)).toBe(false);
+    }
+    reconciler.cleanup();
+  });
+
+  it('does not finish a detached row mount or adopt its remote result', async () => {
+    const document = page(row());
+    const rowElement = document.querySelector<HTMLElement>('#issue_42')!;
+    const native = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    let resolveRemote!: (value: PullRequestRemoteSummary) => void;
+    let resolveMount!: (card: { remove(): void; update(): void }) => void;
+    const remoteResult = new Promise<PullRequestRemoteSummary>((resolve) => { resolveRemote = resolve; });
+    const mountResult = new Promise<{ remove(): void; update(): void }>((resolve) => { resolveMount = resolve; });
+    const remove = vi.fn();
+    const update = vi.fn();
+    const reconciler = createPageReconciler({
+      document,
+      client: { loadPullRequest: vi.fn(() => remoteResult) },
+      IntersectionObserver: undefined,
+      uiFactory: { mount() { return mountResult; } },
+    });
+
+    reconciler.reconcile();
+    rowElement.remove();
+    resolveRemote(remote);
+    resolveMount({ remove, update });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(native.hidden).toBe(false);
+    expect(remove).toHaveBeenCalledOnce();
+    expect(update).not.toHaveBeenCalled();
     reconciler.cleanup();
   });
 
@@ -135,21 +205,81 @@ describe('page reconciler', () => {
     expect(row.querySelector('[data-pr-overview-mount-anchor]')).toBeNull();
   });
 
-  it('malformed-to-ready updates the native counter without remounting or refetching', async () => {
+  it('malformed-to-ready updates the mounted total without remounting or refetching', async () => {
     const document = page(currentPrListHtml);
     document.querySelector('#issue_43')!.remove();
     const counter = document.querySelector<HTMLAnchorElement>('#issue_42 [aria-label="2 comments"]')!;
     counter.setAttribute('aria-label', 'many comments');
+    counter.setAttribute('hidden', 'github-hidden');
+    counter.setAttribute('aria-hidden', 'github-aria');
+    counter.setAttribute('tabindex', '7');
+    counter.setAttribute('style', 'display: inline');
+    const expected = snapshotAttributes(counter);
     const client = { loadPullRequest: vi.fn(async () => remote) };
-    const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));
+    const updates: CardProps[] = [];
+    const mount = vi.fn((_anchor, props: CardProps) => {
+      updates.push(props);
+      return { remove: vi.fn(), update(next: CardProps) { updates.push(next); } };
+    });
     const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount } });
 
     reconciler.reconcile();
     await vi.waitFor(() => expect(counter.getAttribute('aria-hidden')).toBe('true'));
+    const marker = document.querySelector('[data-pr-overview-mount-anchor]');
     counter.setAttribute('aria-label', '2 comments');
 
-    await vi.waitFor(() => expect(mount).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(updates.at(-1)!.summary.totalComments).toEqual({
+      data: { count: 2, href: '/octo/demo/pull/42#comments' },
+      status: 'ready',
+    }));
+    expect(document.querySelector('[data-pr-overview-mount-anchor]')).toBe(marker);
+    expect(mount).toHaveBeenCalledOnce();
     expect(client.loadPullRequest).toHaveBeenCalledOnce();
+    reconciler.cleanup();
+    expectSnapshot(counter, expected);
+  });
+
+  it.each([
+    ['class', '<a data-probe-counter class="comments-link" href="/octo/demo/pull/42">many</a>', (element: Element) => element.removeAttribute('class'), (element: Element) => element.setAttribute('class', 'comments-link')],
+    ['role', '<a data-probe-counter role="comment" href="/octo/demo/pull/42">many</a>', (element: Element) => element.removeAttribute('role'), (element: Element) => element.setAttribute('role', 'comment')],
+    ['data-comment-count', '<span data-comment-count><a data-probe-counter href="/octo/demo/pull/42">many</a></span>', (element: Element) => element.removeAttribute('data-comment-count'), (element: Element) => element.setAttribute('data-comment-count', '')],
+  ])('automatically reconciles a %s-based native counter when its recognition changes', async (_attribute, markup, removeRecognition, restoreRecognition) => {
+    const document = page(recognitionRow(markup));
+    const target = document.querySelector<HTMLElement>(_attribute === 'data-comment-count' ? '[data-comment-count]' : '[data-probe-counter]')!;
+    const totals: CardProps['summary']['totalComments'][] = [];
+    const reconciler = createPageReconciler({
+      document,
+      client: { loadPullRequest: vi.fn(async () => remote) },
+      IntersectionObserver: undefined,
+      uiFactory: { mount(_anchor, props) { totals.push(props.summary.totalComments); return { remove: vi.fn(), update(next) { totals.push(next.summary.totalComments); } }; } },
+    });
+
+    reconciler.reconcile();
+    await vi.waitFor(() => expect(totals).toContainEqual({ message: 'GitHub comment counter is malformed.', status: 'error' }));
+    removeRecognition(target);
+    await vi.waitFor(() => expect(totals).toContainEqual({ data: { count: 0, href: '/octo/demo/pull/42' }, status: 'ready' }));
+    restoreRecognition(target);
+    await vi.waitFor(() => expect(totals.at(-1)).toEqual({ message: 'GitHub comment counter is malformed.', status: 'error' }));
+    reconciler.cleanup();
+  });
+
+  it('automatically reconciles comment-counter text node changes', async () => {
+    const document = page(recognitionRow('<a data-probe-counter href="/octo/demo/pull/42">2 comments</a>'));
+    const counter = document.querySelector<HTMLAnchorElement>('[data-probe-counter]')!;
+    const totals: CardProps['summary']['totalComments'][] = [];
+    const reconciler = createPageReconciler({
+      document,
+      client: { loadPullRequest: vi.fn(async () => remote) },
+      IntersectionObserver: undefined,
+      uiFactory: { mount(_anchor, props) { totals.push(props.summary.totalComments); return { remove: vi.fn(), update(next) { totals.push(next.summary.totalComments); } }; } },
+    });
+
+    reconciler.reconcile();
+    await vi.waitFor(() => expect(totals).toContainEqual({ message: 'GitHub comment counter is malformed.', status: 'error' }));
+    counter.firstChild!.textContent = 'not a counter';
+    await vi.waitFor(() => expect(totals).toContainEqual({ data: { count: 0, href: '/octo/demo/pull/42' }, status: 'ready' }));
+    counter.firstChild!.textContent = '2 comments';
+    await vi.waitFor(() => expect(totals.at(-1)).toEqual({ message: 'GitHub comment counter is malformed.', status: 'error' }));
     reconciler.cleanup();
   });
 
