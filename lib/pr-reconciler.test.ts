@@ -38,6 +38,23 @@ function expectSnapshot(element: Element, expected: ReturnType<typeof snapshotAt
   expect(snapshotAttributes(element)).toEqual(expected);
 }
 
+function createLifecycleCard(anchor: Element) {
+  const expectedRow = anchor.closest('[id^="issue_"].js-issue-row');
+  const host = anchor.ownerDocument.createElement('github-pr-overview');
+  anchor.after(host);
+  const remove = vi.fn(() => host.remove());
+  const update = vi.fn();
+  const mounted: MountedCard = {
+    // Mirrors the adapter's row-ownership contract while the marker is connected.
+    // Capturing its original row lets marker-only tests exercise the controller's separate exact-marker check.
+    isConnected: () => host.isConnected &&
+      host.closest('[id^="issue_"].js-issue-row') === expectedRow,
+    remove,
+    update,
+  };
+  return { anchor, host, mounted, remove, update };
+}
+
 class FakeObserver {
   static instances: FakeObserver[] = [];
   readonly observe = vi.fn();
@@ -371,22 +388,13 @@ describe('page reconciler', () => {
     native.setAttribute('style', 'display: inline');
     const expected = snapshotAttributes(native);
     const client = { loadPullRequest: vi.fn(async () => remote) };
-    const cards: Array<{
-      host: HTMLElement;
-      remove: ReturnType<typeof vi.fn>;
-      update: ReturnType<typeof vi.fn>;
-      mounted: MountedCard;
-    }> = [];
+    const cards: ReturnType<typeof createLifecycleCard>[] = [];
     let resolveReplacement!: (card: MountedCard) => void;
     const mount = vi.fn((anchor: Element) => {
-      const host = document.createElement('github-pr-overview');
-      anchor.after(host);
-      const remove = vi.fn(() => host.remove());
-      const update = vi.fn();
-      const mounted = { isConnected: () => host.isConnected, remove, update };
-      cards.push({ host, mounted, remove, update });
+      const card = createLifecycleCard(anchor);
+      cards.push(card);
       return cards.length === 1
-        ? mounted
+        ? card.mounted
         : new Promise<MountedCard>((resolve) => { resolveReplacement = resolve; });
     });
     const reconciler = createPageReconciler({
@@ -397,44 +405,111 @@ describe('page reconciler', () => {
     });
 
     reconciler.reconcile();
-    await vi.waitFor(() => expect(native.getAttribute('aria-hidden')).toBe('true'));
+    await vi.waitFor(() => expect(cards[0]!.update).toHaveBeenCalledTimes(2));
+    expect(native.hidden).toBe(true);
     cards[0]!.host.remove();
 
     await vi.waitFor(() => expect(mount).toHaveBeenCalledTimes(2));
-    expect(cards[0]!.remove).toHaveBeenCalledOnce();
+    expect(cards[0]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[0]!.update).toHaveBeenCalledTimes(2);
+    expect(cards[1]!.remove).toHaveBeenCalledTimes(0);
+    expect(cards[1]!.update).toHaveBeenCalledTimes(0);
     expectSnapshot(native, expected);
     expect(client.loadPullRequest).toHaveBeenCalledTimes(2);
     expect(document.querySelectorAll('github-pr-overview')).toHaveLength(1);
     expect(document.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
 
     resolveReplacement(cards[1]!.mounted);
-    await vi.waitFor(() => expect(native.getAttribute('aria-hidden')).toBe('true'));
+    await vi.waitFor(() => expect(cards[1]!.update).toHaveBeenCalledTimes(1));
+    expect(native.hidden).toBe(true);
+    expect(cards[0]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[0]!.update).toHaveBeenCalledTimes(2);
+    expect(cards[1]!.remove).toHaveBeenCalledTimes(0);
+    expect(cards[1]!.update).toHaveBeenCalledTimes(1);
     expect(document.querySelectorAll('github-pr-overview')).toHaveLength(1);
     expect(document.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
+
     reconciler.cleanup();
     expectSnapshot(native, expected);
+    expect(cards[0]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[0]!.update).toHaveBeenCalledTimes(2);
+    expect(cards[1]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[1]!.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('automatically replaces a settled controller when only its marker is removed', async () => {
+    const document = page(row());
+    const native = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    native.setAttribute('aria-hidden', 'github-aria');
+    native.setAttribute('tabindex', '7');
+    native.setAttribute('style', 'display: inline');
+    const expected = snapshotAttributes(native);
+    const client = { loadPullRequest: vi.fn(async () => remote) };
+    const cards: ReturnType<typeof createLifecycleCard>[] = [];
+    let resolveReplacement!: (card: MountedCard) => void;
+    const mount = vi.fn((anchor: Element) => {
+      const card = createLifecycleCard(anchor);
+      cards.push(card);
+      return cards.length === 1
+        ? card.mounted
+        : new Promise<MountedCard>((resolve) => { resolveReplacement = resolve; });
+    });
+    const reconciler = createPageReconciler({
+      document,
+      client,
+      IntersectionObserver: undefined,
+      uiFactory: { mount },
+    });
+
+    reconciler.reconcile();
+    await vi.waitFor(() => expect(cards[0]!.update).toHaveBeenCalledTimes(2));
+    expect(native.hidden).toBe(true);
+    document.querySelector('[data-pr-overview-mount-anchor]')!.remove();
+
+    await vi.waitFor(() => expect(mount).toHaveBeenCalledTimes(2));
+    expect(cards[0]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[0]!.update).toHaveBeenCalledTimes(2);
+    expect(cards[1]!.remove).toHaveBeenCalledTimes(0);
+    expect(cards[1]!.update).toHaveBeenCalledTimes(0);
+    expectSnapshot(native, expected);
+    expect(client.loadPullRequest).toHaveBeenCalledTimes(2);
+    expect(document.querySelectorAll('github-pr-overview')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
+
+    resolveReplacement(cards[1]!.mounted);
+    await vi.waitFor(() => expect(cards[1]!.update).toHaveBeenCalledTimes(1));
+    expect(native.hidden).toBe(true);
+    expect(cards[0]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[0]!.update).toHaveBeenCalledTimes(2);
+    expect(cards[1]!.remove).toHaveBeenCalledTimes(0);
+    expect(cards[1]!.update).toHaveBeenCalledTimes(1);
+    expect(document.querySelectorAll('github-pr-overview')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
+
+    reconciler.cleanup();
+    expectSnapshot(native, expected);
+    expect(cards[0]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[0]!.update).toHaveBeenCalledTimes(2);
+    expect(cards[1]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[1]!.update).toHaveBeenCalledTimes(1);
   });
 
   it('automatically replaces a pending controller when only its marker is removed', async () => {
     const document = page(row());
     const native = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    native.setAttribute('aria-hidden', 'github-aria');
+    native.setAttribute('tabindex', '7');
+    native.setAttribute('style', 'display: inline');
+    const expected = snapshotAttributes(native);
     const client = { loadPullRequest: vi.fn(async () => remote) };
-    const cards: Array<{
-      host: HTMLElement;
-      remove: ReturnType<typeof vi.fn>;
-      update: ReturnType<typeof vi.fn>;
-      mounted: MountedCard;
+    const cards: Array<ReturnType<typeof createLifecycleCard> & {
       resolve(card: MountedCard): void;
     }> = [];
     const mount = vi.fn((anchor: Element) => {
-      const host = document.createElement('github-pr-overview');
-      anchor.after(host);
-      const remove = vi.fn(() => host.remove());
-      const update = vi.fn();
-      const mounted = { isConnected: () => host.isConnected, remove, update };
+      const card = createLifecycleCard(anchor);
       let resolve!: (card: MountedCard) => void;
       const pending = new Promise<MountedCard>((done) => { resolve = done; });
-      cards.push({ host, mounted, remove, resolve, update });
+      cards.push({ ...card, resolve });
       return pending;
     });
     const reconciler = createPageReconciler({
@@ -448,23 +523,41 @@ describe('page reconciler', () => {
     document.querySelector('[data-pr-overview-mount-anchor]')!.remove();
 
     await vi.waitFor(() => expect(mount).toHaveBeenCalledTimes(2));
-    expect(native.hidden).toBe(false);
+    expect(cards[0]!.remove).toHaveBeenCalledTimes(0);
+    expect(cards[0]!.update).toHaveBeenCalledTimes(0);
+    expect(cards[1]!.remove).toHaveBeenCalledTimes(0);
+    expect(cards[1]!.update).toHaveBeenCalledTimes(0);
+    expectSnapshot(native, expected);
     expect(client.loadPullRequest).toHaveBeenCalledTimes(2);
+    expect(document.querySelectorAll('github-pr-overview')).toHaveLength(2);
     expect(document.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
 
     cards[0]!.resolve(cards[0]!.mounted);
-    await vi.waitFor(() => expect(cards[0]!.remove).toHaveBeenCalledOnce());
-    expect(cards[0]!.update).not.toHaveBeenCalled();
-    expect(native.hidden).toBe(false);
+    await vi.waitFor(() => expect(cards[0]!.remove).toHaveBeenCalledTimes(1));
+    expect(cards[0]!.update).toHaveBeenCalledTimes(0);
+    expect(cards[1]!.remove).toHaveBeenCalledTimes(0);
+    expect(cards[1]!.update).toHaveBeenCalledTimes(0);
+    expectSnapshot(native, expected);
+    expect(document.querySelectorAll('github-pr-overview')).toHaveLength(1);
 
     cards[1]!.resolve(cards[1]!.mounted);
-    await vi.waitFor(() => expect(native.hidden).toBe(true));
-    expect(cards[1]!.update).toHaveBeenCalled();
+    await vi.waitFor(() => expect(cards[1]!.update).toHaveBeenCalledTimes(1));
+    expect(native.hidden).toBe(true);
+    expect(cards[0]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[0]!.update).toHaveBeenCalledTimes(0);
+    expect(cards[1]!.remove).toHaveBeenCalledTimes(0);
+    expect(cards[1]!.update).toHaveBeenCalledTimes(1);
     expect(document.querySelectorAll('github-pr-overview')).toHaveLength(1);
     expect(document.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
     expect(mount).toHaveBeenCalledTimes(2);
     expect(client.loadPullRequest).toHaveBeenCalledTimes(2);
+
     reconciler.cleanup();
+    expectSnapshot(native, expected);
+    expect(cards[0]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[0]!.update).toHaveBeenCalledTimes(0);
+    expect(cards[1]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[1]!.update).toHaveBeenCalledTimes(1);
   });
 
   it('automatically replaces a pending controller whose mounted host was removed before resolution', async () => {
@@ -475,22 +568,14 @@ describe('page reconciler', () => {
     native.setAttribute('style', 'display: inline');
     const expected = snapshotAttributes(native);
     const client = { loadPullRequest: vi.fn(async () => remote) };
-    const cards: Array<{
-      host: HTMLElement;
-      remove: ReturnType<typeof vi.fn>;
-      update: ReturnType<typeof vi.fn>;
-      mounted: MountedCard;
+    const cards: Array<ReturnType<typeof createLifecycleCard> & {
       resolve(card: MountedCard): void;
     }> = [];
     const mount = vi.fn((anchor: Element) => {
-      const host = document.createElement('github-pr-overview');
-      anchor.after(host);
-      const remove = vi.fn(() => host.remove());
-      const update = vi.fn();
-      const mounted = { isConnected: () => host.isConnected, remove, update };
+      const card = createLifecycleCard(anchor);
       let resolve!: (card: MountedCard) => void;
       const pending = new Promise<MountedCard>((done) => { resolve = done; });
-      cards.push({ host, mounted, remove, resolve, update });
+      cards.push({ ...card, resolve });
       return pending;
     });
     const reconciler = createPageReconciler({
@@ -506,52 +591,175 @@ describe('page reconciler', () => {
     cards[0]!.resolve(cards[0]!.mounted);
 
     await vi.waitFor(() => expect(mount).toHaveBeenCalledTimes(2));
-    expect(cards[0]!.remove).toHaveBeenCalledOnce();
-    expect(cards[0]!.update).not.toHaveBeenCalled();
+    expect(cards[0]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[0]!.update).toHaveBeenCalledTimes(0);
+    expect(cards[1]!.remove).toHaveBeenCalledTimes(0);
+    expect(cards[1]!.update).toHaveBeenCalledTimes(0);
     expectSnapshot(native, expected);
     expect(client.loadPullRequest).toHaveBeenCalledTimes(2);
     expect(document.querySelectorAll('github-pr-overview')).toHaveLength(1);
     expect(document.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
 
     cards[1]!.resolve(cards[1]!.mounted);
-    await vi.waitFor(() => expect(native.getAttribute('aria-hidden')).toBe('true'));
-    expect(cards[1]!.update).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(cards[1]!.update).toHaveBeenCalledTimes(1));
+    expect(native.hidden).toBe(true);
+    expect(cards[0]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[0]!.update).toHaveBeenCalledTimes(0);
+    expect(cards[1]!.remove).toHaveBeenCalledTimes(0);
+    expect(cards[1]!.update).toHaveBeenCalledTimes(1);
     expect(document.querySelectorAll('github-pr-overview')).toHaveLength(1);
     expect(document.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
     expect(mount).toHaveBeenCalledTimes(2);
     expect(client.loadPullRequest).toHaveBeenCalledTimes(2);
+
     reconciler.cleanup();
     expectSnapshot(native, expected);
+    expect(cards[0]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[0]!.update).toHaveBeenCalledTimes(0);
+    expect(cards[1]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[1]!.update).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects a disconnected mounted host during explicit reconciliation', async () => {
-    const document = page(row());
+  it('automatically replaces a connected mounted host moved into a different pull request row', async () => {
+    const document = page(
+      row() +
+      row(43, '<a class="comments-link" aria-label="5 comments" href="/octo/demo/pull/43#issuecomment-5">5</a>'),
+    );
+    const originalRow = document.querySelector<HTMLElement>('#issue_42')!;
+    const destinationRow = document.querySelector<HTMLElement>('#issue_43')!;
+    const originalNative = originalRow.querySelector<HTMLAnchorElement>('.comments-link')!;
+    const destinationNative = destinationRow.querySelector<HTMLAnchorElement>('.comments-link')!;
+    originalNative.setAttribute('aria-hidden', 'github-aria');
+    originalNative.setAttribute('tabindex', '7');
+    originalNative.setAttribute('style', 'display: inline');
+    const originalExpected = snapshotAttributes(originalNative);
+    const destinationExpected = snapshotAttributes(destinationNative);
+    const client = { loadPullRequest: vi.fn(async () => remote) };
+    const cards = new Map<string, ReturnType<typeof createLifecycleCard>[]>([
+      ['issue_42', []],
+      ['issue_43', []],
+    ]);
+    let resolveReplacement!: (card: MountedCard) => void;
     const mount = vi.fn((anchor: Element) => {
-      const host = document.createElement('github-pr-overview');
-      anchor.after(host);
-      return {
-        isConnected: () => host.isConnected,
-        remove() { host.remove(); },
-        update: vi.fn(),
-      };
+      const owner = anchor.closest<HTMLElement>('[id^="issue_"].js-issue-row')!;
+      const card = createLifecycleCard(anchor);
+      const rowCards = cards.get(owner.id)!;
+      rowCards.push(card);
+      return owner === originalRow && rowCards.length === 2
+        ? new Promise<MountedCard>((resolve) => { resolveReplacement = resolve; })
+        : card.mounted;
     });
     const reconciler = createPageReconciler({
       document,
-      client: { loadPullRequest: vi.fn(async () => remote) },
+      client,
       IntersectionObserver: undefined,
       uiFactory: { mount },
     });
 
     reconciler.reconcile();
-    await Promise.resolve();
-    document.querySelector('github-pr-overview')!.remove();
+    const originalCards = cards.get('issue_42')!;
+    const destinationCards = cards.get('issue_43')!;
+    await vi.waitFor(() => {
+      expect(originalCards[0]!.update).toHaveBeenCalledTimes(2);
+      expect(destinationCards[0]!.update).toHaveBeenCalledTimes(2);
+    });
+    expect(originalNative.hidden).toBe(true);
+    expect(destinationNative.hidden).toBe(true);
+
+    destinationRow.querySelector('.comment-area')!.append(originalCards[0]!.host);
+
+    await vi.waitFor(() => {
+      expect(mount).toHaveBeenCalledTimes(3);
+      expect(destinationCards[0]!.update).toHaveBeenCalledTimes(4);
+    });
+    expect(originalCards[0]!.remove).toHaveBeenCalledTimes(1);
+    expect(originalCards[0]!.update).toHaveBeenCalledTimes(2);
+    expect(originalCards[1]!.remove).toHaveBeenCalledTimes(0);
+    expect(originalCards[1]!.update).toHaveBeenCalledTimes(0);
+    expect(destinationCards[0]!.remove).toHaveBeenCalledTimes(0);
+    expect(destinationCards[0]!.update).toHaveBeenCalledTimes(4);
+    expectSnapshot(originalNative, originalExpected);
+    expect(destinationNative.hidden).toBe(true);
+    expect(client.loadPullRequest).toHaveBeenCalledTimes(3);
+    expect(originalRow.querySelectorAll('github-pr-overview')).toHaveLength(1);
+    expect(destinationRow.querySelectorAll('github-pr-overview')).toHaveLength(1);
+    expect(originalRow.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
+    expect(destinationRow.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
+    expect(originalCards[1]!.host.closest('[id^="issue_"].js-issue-row')).toBe(originalRow);
+    expect(destinationCards[0]!.host.closest('[id^="issue_"].js-issue-row')).toBe(destinationRow);
+
+    resolveReplacement(originalCards[1]!.mounted);
+    await vi.waitFor(() => expect(originalCards[1]!.update).toHaveBeenCalledTimes(1));
+    expect(originalNative.hidden).toBe(true);
+    expect(destinationNative.hidden).toBe(true);
+    expect(mount).toHaveBeenCalledTimes(3);
+    expect(client.loadPullRequest).toHaveBeenCalledTimes(3);
+    expect(originalCards[0]!.remove).toHaveBeenCalledTimes(1);
+    expect(originalCards[0]!.update).toHaveBeenCalledTimes(2);
+    expect(originalCards[1]!.remove).toHaveBeenCalledTimes(0);
+    expect(originalCards[1]!.update).toHaveBeenCalledTimes(1);
+    expect(destinationCards[0]!.remove).toHaveBeenCalledTimes(0);
+    expect(destinationCards[0]!.update).toHaveBeenCalledTimes(4);
+    expect(originalRow.querySelectorAll('github-pr-overview')).toHaveLength(1);
+    expect(destinationRow.querySelectorAll('github-pr-overview')).toHaveLength(1);
+    expect(originalRow.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
+    expect(destinationRow.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
+
+    reconciler.cleanup();
+    expectSnapshot(originalNative, originalExpected);
+    expectSnapshot(destinationNative, destinationExpected);
+    expect(originalCards[0]!.remove).toHaveBeenCalledTimes(1);
+    expect(originalCards[0]!.update).toHaveBeenCalledTimes(2);
+    expect(originalCards[1]!.remove).toHaveBeenCalledTimes(1);
+    expect(originalCards[1]!.update).toHaveBeenCalledTimes(1);
+    expect(destinationCards[0]!.remove).toHaveBeenCalledTimes(1);
+    expect(destinationCards[0]!.update).toHaveBeenCalledTimes(4);
+  });
+
+  it('rejects a disconnected mounted host during explicit reconciliation', async () => {
+    const document = page(row());
+    const native = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    native.setAttribute('aria-hidden', 'github-aria');
+    native.setAttribute('tabindex', '7');
+    native.setAttribute('style', 'display: inline');
+    const expected = snapshotAttributes(native);
+    const client = { loadPullRequest: vi.fn(async () => remote) };
+    const cards: ReturnType<typeof createLifecycleCard>[] = [];
+    const mount = vi.fn((anchor: Element) => {
+      const card = createLifecycleCard(anchor);
+      cards.push(card);
+      return card.mounted;
+    });
+    const reconciler = createPageReconciler({
+      document,
+      client,
+      IntersectionObserver: undefined,
+      uiFactory: { mount },
+    });
+
+    reconciler.reconcile();
+    await vi.waitFor(() => expect(cards[0]!.update).toHaveBeenCalledTimes(2));
+    expect(native.hidden).toBe(true);
+    cards[0]!.host.remove();
     reconciler.reconcile();
 
     expect(mount).toHaveBeenCalledTimes(2);
-    await Promise.resolve();
+    await vi.waitFor(() => expect(cards[1]!.update).toHaveBeenCalledTimes(3));
+    expect(native.hidden).toBe(true);
+    expect(client.loadPullRequest).toHaveBeenCalledTimes(2);
+    expect(cards[0]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[0]!.update).toHaveBeenCalledTimes(2);
+    expect(cards[1]!.remove).toHaveBeenCalledTimes(0);
+    expect(cards[1]!.update).toHaveBeenCalledTimes(3);
     expect(document.querySelectorAll('github-pr-overview')).toHaveLength(1);
     expect(document.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
+
     reconciler.cleanup();
+    expectSnapshot(native, expected);
+    expect(cards[0]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[0]!.update).toHaveBeenCalledTimes(2);
+    expect(cards[1]!.remove).toHaveBeenCalledTimes(1);
+    expect(cards[1]!.update).toHaveBeenCalledTimes(3);
   });
 
   it('reconciles a changed counter across 30 rows with bounded row-local queries', async () => {
