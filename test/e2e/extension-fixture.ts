@@ -4,6 +4,9 @@ import path from 'node:path';
 import { chromium, expect, test as base, type Page } from '@playwright/test';
 
 const fixtureDirectory = path.resolve('test/fixtures/github/current');
+const QUIET_WINDOW_MS = 50;
+const STABLE_QUIET_ROUNDS = 3;
+const QUIESCENCE_TIMEOUT_MS = 2_000;
 
 export const urls = {
   prList: 'https://github.com/octo/demo/pulls',
@@ -20,13 +23,22 @@ interface Diagnostics {
   unexpectedRequests: string[];
 }
 
+interface NativeCounterSnapshot {
+  ariaHidden: string | null;
+  display: string;
+  hidden: boolean;
+  style: string | null;
+  tabindex: string | null;
+  visibility: string;
+}
+
 interface ExtensionHarness {
   currentRowHtml: string;
   expectNoFailures(): Promise<void>;
   installHostilePageCss(): Promise<void>;
-  nativeCounterStatesAtHostMount(): Promise<boolean[]>;
+  nativeCounterSnapshotsAtHostConnection(): Promise<NativeCounterSnapshot[]>;
   page: Page;
-  recordNativeCounterAtHostMount(): Promise<void>;
+  recordNativeCounterAtHostConnection(): Promise<void>;
   urls: typeof urls;
 }
 
@@ -67,7 +79,9 @@ export const test = base.extend<{ extension: ExtensionHarness }>({
       requestFailures: [],
       unexpectedRequests: [],
     };
-    const pendingRoutes = new Set<Promise<void>>();
+    const pendingRoutes = new Map<symbol, string>();
+    let activity = 0;
+    const noteActivity = () => { activity += 1; };
     const extensionPath = path.resolve('.output/chrome-mv3');
     const context = await chromium.launchPersistentContext('', {
       channel: 'chromium',
@@ -81,14 +95,16 @@ export const test = base.extend<{ extension: ExtensionHarness }>({
 
     try {
       await context.route('https://github.com/**', async (route) => {
-        let settleRoute: (() => void) | undefined;
-        const settled = new Promise<void>((resolve) => { settleRoute = resolve; });
-        pendingRoutes.add(settled);
+        const request = route.request();
+        const routeKey = `${request.method()} ${request.url()}`;
+        const routeId = Symbol(routeKey);
+        pendingRoutes.set(routeId, routeKey);
+        noteActivity();
         try {
-          const request = route.request();
           const body = responses.get(request.url());
           if (request.method() !== 'GET' || body === undefined) {
             diagnostics.unexpectedRequests.push(`${request.method()} ${request.url()}`);
+            noteActivity();
             await route.abort('blockedbyclient');
             return;
           }
@@ -100,23 +116,31 @@ export const test = base.extend<{ extension: ExtensionHarness }>({
               : undefined,
           });
         } finally {
-          pendingRoutes.delete(settled);
-          settleRoute!();
+          pendingRoutes.delete(routeId);
+          noteActivity();
         }
       });
       context.on('request', (request) => {
         if (new URL(request.url()).pathname.endsWith('/content-scripts/content.css')) {
           diagnostics.contentScriptCssRequests.push(request.url());
+          noteActivity();
         }
       });
 
       const page = await context.newPage();
-      page.on('pageerror', (error) => diagnostics.pageErrors.push(error.message));
+      page.on('pageerror', (error) => {
+        diagnostics.pageErrors.push(error.message);
+        noteActivity();
+      });
       page.on('console', (message) => {
-        if (message.type() === 'error') diagnostics.consoleErrors.push(messageForConsole(message.type(), message.text()));
+        if (message.type() === 'error') {
+          diagnostics.consoleErrors.push(messageForConsole(message.type(), message.text()));
+          noteActivity();
+        }
       });
       page.on('requestfailed', (request) => {
         diagnostics.requestFailures.push(`${request.method()} ${request.url()} ${request.failure()?.errorText ?? ''}`.trim());
+        noteActivity();
       });
       await page.addInitScript(() => {
         const removeUnservedFixtureRows = () => document.querySelector('#issue_43')?.remove();
@@ -127,10 +151,24 @@ export const test = base.extend<{ extension: ExtensionHarness }>({
       await use({
         currentRowHtml: currentRow(fixtures.prList),
         async expectNoFailures() {
-          await Promise.all([...pendingRoutes]);
-          await page.evaluate(() => new Promise<void>((resolve) =>
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-          ));
+          await Promise.race([
+            page.waitForLoadState('networkidle'),
+            new Promise<never>((_resolve, reject) => setTimeout(
+              () => reject(new Error('Timed out waiting for browser network idle.')),
+              QUIESCENCE_TIMEOUT_MS,
+            )),
+          ]);
+          const deadline = Date.now() + QUIESCENCE_TIMEOUT_MS;
+          let stableRounds = 0;
+          while (stableRounds < STABLE_QUIET_ROUNDS && Date.now() < deadline) {
+            const observedActivity = activity;
+            await new Promise<void>((resolve) => setTimeout(resolve, QUIET_WINDOW_MS));
+            if (pendingRoutes.size === 0 && activity === observedActivity) stableRounds += 1;
+            else stableRounds = 0;
+          }
+          if (stableRounds !== STABLE_QUIET_ROUNDS) {
+            throw new Error(`Browser diagnostics did not reach quiescence; pending routes: ${[...pendingRoutes.values()].join(', ') || 'none'}.`);
+          }
           expect(diagnostics.pageErrors, `page errors: ${diagnostics.pageErrors.join('\n')}`).toEqual([]);
           expect(diagnostics.consoleErrors, `console errors: ${diagnostics.consoleErrors.join('\n')}`).toEqual([]);
           expect(diagnostics.requestFailures, `request failures: ${diagnostics.requestFailures.join('\n')}`).toEqual([]);
@@ -152,25 +190,31 @@ export const test = base.extend<{ extension: ExtensionHarness }>({
             await session.detach();
           }
         },
-        async nativeCounterStatesAtHostMount() {
-          return page.evaluate(() => (window as Window & { __prOverviewCounterStates?: boolean[] }).__prOverviewCounterStates ?? []);
+        async nativeCounterSnapshotsAtHostConnection() {
+          return page.evaluate(() =>
+            (window as Window & { __prOverviewCounterSnapshots?: NativeCounterSnapshot[] }).__prOverviewCounterSnapshots ?? [],
+          );
         },
         page,
-        async recordNativeCounterAtHostMount() {
+        async recordNativeCounterAtHostConnection() {
           await page.addInitScript(() => {
-            const trackedWindow = window as Window & { __prOverviewCounterStates?: boolean[] };
-            trackedWindow.__prOverviewCounterStates = [];
-            const inspectAddedNodes = (records: MutationRecord[]) => {
-              for (const record of records) {
-                for (const node of record.addedNodes) {
-                  if (!(node instanceof HTMLElement) || node.localName !== 'github-pr-overview') continue;
-                  const row = node.closest('#issue_42');
-                  const counter = row?.querySelector<HTMLAnchorElement>('a[aria-label="2 comments"]');
-                  if (counter) trackedWindow.__prOverviewCounterStates!.push(counter.hidden);
-                }
+            const trackedWindow = window as Window & { __prOverviewCounterSnapshots?: NativeCounterSnapshot[] };
+            trackedWindow.__prOverviewCounterSnapshots = [];
+            customElements.define('github-pr-overview', class extends HTMLElement {
+              connectedCallback() {
+                const counter = this.closest('#issue_42')?.querySelector<HTMLAnchorElement>('a[aria-label="2 comments"]');
+                if (!counter) return;
+                const styles = getComputedStyle(counter);
+                trackedWindow.__prOverviewCounterSnapshots!.push({
+                  ariaHidden: counter.getAttribute('aria-hidden'),
+                  display: styles.display,
+                  hidden: counter.hidden,
+                  style: counter.getAttribute('style'),
+                  tabindex: counter.getAttribute('tabindex'),
+                  visibility: styles.visibility,
+                });
               }
-            };
-            new MutationObserver(inspectAddedNodes).observe(document, { childList: true, subtree: true });
+            });
           });
         },
         urls,
