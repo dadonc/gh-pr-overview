@@ -77,6 +77,33 @@ describe('validateBundle', () => {
     }))).toEqual(['Content script exceeds 250000 bytes: 250001']);
   });
 
+  it('uses true typed-array view lengths despite shadowed byteLength properties', () => {
+    const oversizedBuffer = Buffer.alloc(250_001);
+    Object.defineProperty(oversizedBuffer, 'byteLength', { value: 1 });
+    const oversizedUint8Array = new Uint8Array(250_001);
+    Object.defineProperty(oversizedUint8Array, 'byteLength', { value: 1 });
+
+    for (const contentScript of [oversizedBuffer, oversizedUint8Array]) {
+      expect(validateBundle(validBundle({
+        contentScript,
+        sizes: [1, ...ALLOWED_FILES.slice(1).map(() => 1)],
+      }))).toEqual([
+        'Content script exceeds 250000 bytes: 250001',
+        'Content script size does not match payload: recorded 1, actual 250001',
+      ]);
+    }
+
+    const slicedView = new Uint8Array(300_000).subarray(50_000, 250_001);
+    expect(validateBundle(validBundle({
+      contentScript: slicedView,
+      sizes: [200_001, ...ALLOWED_FILES.slice(1).map(() => 1)],
+    }))).toEqual([]);
+    expect(validateBundle(validBundle({
+      contentScript: slicedView,
+      sizes: [200_000, ...ALLOWED_FILES.slice(1).map(() => 1)],
+    }))).toEqual(['Content script size does not match payload: recorded 200000, actual 200001']);
+  });
+
   it('rejects a Chrome package larger than 270,000 bytes', () => {
     expect(validateBundle(validBundle({
       sizes: [1, 270_000, 0, 0, 0, 0, 0],

@@ -16,6 +16,10 @@ const ALLOWED_DIRECTORIES = new Set(['content-scripts', 'icon']);
 const CONTENT_SCRIPT_FILE = 'content-scripts/content.js';
 const MAX_CONTENT_SCRIPT_BYTES = 250_000;
 const MAX_BUNDLE_BYTES = 270_000;
+const typedArrayByteLength = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype),
+  'byteLength',
+).get;
 
 function normalizeFilePath(file) {
   return posix.normalize(file.replaceAll('\\', '/')).replace(/^(?:\.\/)+/, '');
@@ -26,7 +30,7 @@ function isContentScriptPayload(value) {
 }
 
 function contentScriptByteLength(value) {
-  return typeof value === 'string' ? Buffer.byteLength(value) : value.byteLength;
+  return typeof value === 'string' ? Buffer.byteLength(value) : typedArrayByteLength.call(value);
 }
 
 function plural(count, singular, pluralForm = `${singular}s`) {
