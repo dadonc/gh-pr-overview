@@ -105,26 +105,28 @@ describe('PullRequestCard', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     const view = render(<PullRequestCard summary={ready} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
     const status = screen.getByRole('status');
+    const expectStatus = (message: string) => {
+      const currentStatus = screen.getByRole('status');
+      expect(currentStatus).toBe(status);
+      expect(currentStatus).toHaveAttribute('role', 'status');
+      expect(currentStatus).toHaveAttribute('aria-live', 'polite');
+      expect(currentStatus).toHaveAttribute('aria-atomic', 'true');
+      expect(currentStatus.textContent).toBe(message);
+      expect(screen.getAllByRole('status')).toHaveLength(1);
+    };
 
     expect(screen.getByTestId('pr-card')).toHaveAttribute('aria-busy', 'false');
-    expect(status).toHaveAttribute('aria-live', 'polite');
-    expect(status).toHaveAttribute('aria-atomic', 'true');
-    expect(status).toHaveTextContent('Pull request overview updated.');
-    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expectStatus('Pull request overview updated.');
 
     view.rerender(<PullRequestCard summary={loading} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
     expect(screen.getByTestId('pr-card')).toHaveAttribute('aria-busy', 'true');
-    expect(screen.getByRole('status')).toBe(status);
-    expect(screen.getByRole('status')).toHaveTextContent('Loading pull request overview.');
-    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expectStatus('Loading pull request overview.');
 
     view.rerender(<PullRequestCard summary={ready} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
     expect(screen.getByTestId('pr-card')).toHaveAttribute('aria-busy', 'false');
-    expect(screen.getByRole('status')).toBe(status);
-    expect(screen.getByRole('status')).toHaveTextContent('Pull request overview updated.');
-    expect(screen.getAllByRole('status')).toHaveLength(1);
+    expectStatus('Pull request overview updated.');
     expect(screen.getByText('23 total comments')).toBeVisible();
     expect(consoleError).not.toHaveBeenCalledWith(expect.stringContaining('Rendered more hooks'));
     consoleError.mockRestore();
