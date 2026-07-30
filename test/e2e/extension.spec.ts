@@ -53,16 +53,20 @@ test('boots the unpacked extension with a rendered, isolated shadow card', async
     const weight = (selector: string) =>
       getComputedStyle(element.querySelector<HTMLElement>(selector)!).fontWeight;
     return {
+      additions: getComputedStyle(element.querySelector<HTMLElement>('.additions')!).color,
       agent: weight('.agent'),
       comments: weight('.comments'),
+      deletions: getComputedStyle(element.querySelector<HTMLElement>('.deletions')!).color,
       diff: weight('.diff'),
       separator: weight('.separator'),
       unresolved: weight('[aria-label="0 unresolved review threads"]'),
     };
   });
   expect(typography).toEqual({
+    additions: 'rgb(26, 127, 55)',
     agent: '400',
     comments: '400',
+    deletions: 'rgb(209, 36, 47)',
     diff: '400',
     separator: '400',
     unresolved: '400',
@@ -88,6 +92,7 @@ test('boots the unpacked extension with a rendered, isolated shadow card', async
       cardLeft: cardBounds.left,
       cardRight: cardBounds.right,
       cardWidth: cardBounds.width,
+      containerLeft: containerBounds.left,
       containerRight: containerBounds.right,
       containerWidth: containerBounds.width,
       rowLeft: rowBounds.left,
@@ -97,7 +102,7 @@ test('boots the unpacked extension with a rendered, isolated shadow card', async
   expect(bounds.cardLeft).toBeGreaterThanOrEqual(bounds.rowLeft);
   expect(bounds.cardRight).toBeLessThanOrEqual(bounds.rowRight);
   expect(bounds.cardWidth).toBeLessThan(bounds.containerWidth);
-  expect(bounds.cardRight).toBeCloseTo(bounds.containerRight, 1);
+  expect(bounds.cardLeft).toBeCloseTo(bounds.containerLeft, 1);
   await expect(host).toHaveCSS('display', 'block');
   await expect(host).toHaveCSS('max-width', '100%');
 

@@ -39,6 +39,8 @@ describe('PullRequestCard', () => {
     expect(unresolved).toHaveClass('unresolved');
     expect(comments).not.toHaveClass('unresolved');
     expect(diff).not.toHaveClass('unresolved');
+    expect(screen.getByText('−81')).toHaveClass('deletions');
+    expect(screen.getByText('+340')).toHaveClass('additions');
     expect(screen.getByText('Codex 3')).not.toHaveClass('unresolved');
 
     const separators = screen.getAllByText('·', { selector: '.separator' });
@@ -80,7 +82,7 @@ describe('PullRequestCard', () => {
       agents: { status: 'loading' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
-    expect(visibleCardText()).toBe('— comments · 2+ unresolved · −81+/+340+ 12+ files · Loading agents…');
+    expect(visibleCardText()).toBe('— comments · 2 unresolved · −81+/+340+ 12+ files · Loading agents…');
     expect(screen.getByText('— comments')).toHaveAttribute('title', 'GitHub counter is malformed.');
     expect(screen.getByRole('link', { name: 'At least 2 unresolved review threads' })).toHaveAttribute('title', 'More content is loading.');
     expect(screen.getByRole('link', { name: 'At least 81 deletions, 340 additions, 12 files changed' })).toHaveAttribute('title', 'Collapsed files.');
@@ -118,13 +120,16 @@ describe('PullRequestCard', () => {
     render(<PullRequestCard summary={{
       ...ready,
       totalComments: { data: { count: 23, href: '/o/r/pull/1#comments' }, reason: 'counter may still change', status: 'partial' },
-      reviewThreads: { data: { total: 8, unresolved: 2, resolvedOrOutdated: 6 }, reason: 'timeline is incomplete', status: 'partial' },
+      reviewThreads: { data: { total: 8, unresolved: 0, resolvedOrOutdated: 6 }, reason: 'timeline is incomplete', status: 'partial' },
       agents: { data: [], reason: 'timeline is incomplete', status: 'partial' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
-    expect(visibleCardText()).toBe('23+ comments · 2+ unresolved · −81/+340 12 files · No AI agents detected yet');
+    expect(visibleCardText()).toBe('23+ comments · 0 unresolved · −81/+340 12 files · No AI agents detected yet');
     expect(screen.getByText('23+ comments')).toHaveAttribute('aria-describedby');
-    expect(screen.getByRole('link', { name: 'At least 2 unresolved review threads' })).toHaveAttribute('aria-describedby');
+    const unresolved = screen.getByRole('link', { name: 'At least 0 unresolved review threads' });
+    expect(unresolved).toHaveAttribute('aria-describedby');
+    expect(unresolved).not.toHaveClass('unresolved');
+    expect(unresolved).not.toHaveTextContent('+');
     expect(screen.getByText('No AI agents detected yet')).toHaveAttribute('aria-describedby');
   });
 
@@ -244,7 +249,10 @@ describe('PullRequestCard', () => {
     expect(CARD_STYLES).toContain('flex-flow: row nowrap');
     expect(CARD_STYLES).toContain('white-space: nowrap');
     expect(CARD_STYLES).toContain('overflow-x: auto');
-    expect(CARD_STYLES).toContain('margin-inline-start: auto');
+    expect(CARD_STYLES).toContain('margin-inline-start: 0');
+    expect(CARD_STYLES).not.toContain('margin-inline-start: auto');
+    expect(CARD_STYLES).toContain('color: var(--fgColor-danger');
+    expect(CARD_STYLES).toContain('color: var(--fgColor-success');
     expect(CARD_STYLES).toContain('--fgColor-accent');
     expect(CARD_STYLES).toContain(':focus-visible');
     expect(CARD_STYLES).toContain('prefers-reduced-motion: reduce');
