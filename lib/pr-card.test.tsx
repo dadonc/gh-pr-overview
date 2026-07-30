@@ -89,19 +89,40 @@ describe('PullRequestCard', () => {
     expect(chip).toHaveAttribute('title', expect.stringContaining('Some timeline fragments were unavailable.'));
   });
 
-  it('updates aria-busy and one stable status node as sections load', () => {
-    const loading: PullRequestSummary = { ...ready, totalComments: { status: 'loading' }, reviewThreads: { status: 'loading' }, diff: { status: 'loading' }, agents: { status: 'loading' } };
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const view = render(<PullRequestCard summary={loading} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
+  it.each([
+    ['total comments', { ...ready, totalComments: { status: 'loading' } }],
+    ['review threads', { ...ready, reviewThreads: { status: 'loading' } }],
+    ['changed files', { ...ready, diff: { status: 'loading' } }],
+    ['AI agents', { ...ready, agents: { status: 'loading' } }],
+  ] as const satisfies readonly [string, PullRequestSummary][])('sets aria-busy while only %s is loading', (_, loading) => {
+    render(<PullRequestCard summary={loading} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
     expect(screen.getByTestId('pr-card')).toHaveAttribute('aria-busy', 'true');
-    expect(screen.getByRole('status')).toHaveAttribute('aria-live', 'polite');
-    expect(screen.getByRole('status')).toHaveAttribute('aria-atomic', 'true');
+  });
+
+  it('updates aria-busy and retains one stable status node as sections load', () => {
+    const loading: PullRequestSummary = { ...ready, totalComments: { status: 'loading' } };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const view = render(<PullRequestCard summary={ready} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
+    const status = screen.getByRole('status');
+
+    expect(screen.getByTestId('pr-card')).toHaveAttribute('aria-busy', 'false');
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(status).toHaveAttribute('aria-atomic', 'true');
+    expect(status).toHaveTextContent('Pull request overview updated.');
+    expect(screen.getAllByRole('status')).toHaveLength(1);
+
+    view.rerender(<PullRequestCard summary={loading} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
+
+    expect(screen.getByTestId('pr-card')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByRole('status')).toBe(status);
     expect(screen.getByRole('status')).toHaveTextContent('Loading pull request overview.');
+    expect(screen.getAllByRole('status')).toHaveLength(1);
 
     view.rerender(<PullRequestCard summary={ready} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
     expect(screen.getByTestId('pr-card')).toHaveAttribute('aria-busy', 'false');
+    expect(screen.getByRole('status')).toBe(status);
     expect(screen.getByRole('status')).toHaveTextContent('Pull request overview updated.');
     expect(screen.getAllByRole('status')).toHaveLength(1);
     expect(screen.getByText('23 total comments')).toBeVisible();
