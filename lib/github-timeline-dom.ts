@@ -39,6 +39,28 @@ export interface TimelineExtraction {
 }
 
 const threadRootSelector = '.js-resolvable-timeline-thread-container, review-thread-collapsible';
+const timelineLoaderSelector = '#js-timeline-progressive-loader[data-timeline-item-src]';
+const inlineResponseSelector = '[id^="discussion_r"], [id^="discussion-diff-"]';
+const reviewRequestSelector = '[data-review-request-action], [data-review-requested-login], .TimelineItem[id^="event-"]';
+const reviewEventSelector = '[data-review-event="started-reviewing"], .TimelineItem[id^="event-"]';
+const recognizableTimelineEvidenceSelector = [
+  '#discussion_bucket',
+  '.js-discussion',
+  '[data-testid="issue-viewer-issue-container"]',
+  threadRootSelector,
+  '[id^="issuecomment-"]',
+  '[id^="pullrequestreview-"]',
+  inlineResponseSelector,
+  reviewRequestSelector,
+  reviewEventSelector,
+  '[data-reaction-content="eyes"]',
+  timelineLoaderSelector,
+].join(', ');
+
+export function hasRecognizableTimelineEvidence(document: Document): boolean {
+  return Boolean(document.querySelector(recognizableTimelineEvidenceSelector));
+}
+
 function documentsFrom(input: Document | readonly Document[]): readonly Document[] { return 'querySelector' in input ? [input] : input; }
 function textLogin(element: Element | null): string | undefined {
   if (!element) return undefined;
@@ -200,7 +222,7 @@ export function extractTimeline(
   };
   const nextTimelineFragments: string[] = []; const seenFragments = new Set<string>();
   for (const document of documentsFrom(input)) {
-    for (const loader of document.querySelectorAll<HTMLElement>('#js-timeline-progressive-loader[data-timeline-item-src]')) { const fragment = loader.getAttribute('data-timeline-item-src'); if (fragment && !seenFragments.has(fragment)) { seenFragments.add(fragment); nextTimelineFragments.push(fragment); } }
+    for (const loader of document.querySelectorAll<HTMLElement>(timelineLoaderSelector)) { const fragment = loader.getAttribute('data-timeline-item-src'); if (fragment && !seenFragments.has(fragment)) { seenFragments.add(fragment); nextTimelineFragments.push(fragment); } }
     for (const root of document.querySelectorAll<HTMLElement>(threadRootSelector)) {
       const identities = threadIdentities(root, identity);
       const resolved = resolvedState(root);
@@ -216,7 +238,7 @@ export function extractTimeline(
       if (root.hasAttribute('data-deferred-content-url') && hasHiddenDeferredBody(root)) {
         agentReasons.add('A deferred review thread may hide AI response details.');
       }
-      for (const element of root.querySelectorAll<HTMLElement>('[id^="discussion_r"], [id^="discussion-diff-"]')) {
+      for (const element of root.querySelectorAll<HTMLElement>(inlineResponseSelector)) {
         addResponse('inline', element);
       }
       for (const element of root.querySelectorAll<HTMLElement>('[id^="issuecomment-"]')) {
@@ -225,10 +247,10 @@ export function extractTimeline(
     }
     for (const element of document.querySelectorAll<HTMLElement>('[id^="issuecomment-"]')) { if (!element.closest(threadRootSelector)) addResponse('comment', element); }
     for (const element of document.querySelectorAll<HTMLElement>('[id^="pullrequestreview-"]')) addResponse('review', element);
-    for (const element of document.querySelectorAll<HTMLElement>('[id^="discussion_r"], [id^="discussion-diff-"]')) {
+    for (const element of document.querySelectorAll<HTMLElement>(inlineResponseSelector)) {
       if (!element.closest(threadRootSelector)) addResponse('inline', element);
     }
-    for (const element of document.querySelectorAll<HTMLElement>('[data-review-request-action], [data-review-requested-login], .TimelineItem[id^="event-"]')) {
+    for (const element of document.querySelectorAll<HTMLElement>(reviewRequestSelector)) {
       const actionValue = element.getAttribute('data-review-request-action')?.toLowerCase();
       const text = element.textContent?.replace(/\s+/g, ' ').trim() ?? '';
       const usesStructuredAction = actionValue === 'removed' || actionValue === 'requested';
@@ -249,7 +271,7 @@ export function extractTimeline(
         add('review-request', reviewRequests, { action, id, requestedLogin });
       }
     }
-    for (const element of document.querySelectorAll<HTMLElement>('[data-review-event="started-reviewing"], .TimelineItem[id^="event-"]')) {
+    for (const element of document.querySelectorAll<HTMLElement>(reviewEventSelector)) {
       const usesStructuredEvent = element.getAttribute('data-review-event') === 'started-reviewing';
       const started = usesStructuredEvent || /\bstarted reviewing\b/i.test(element.textContent?.replace(/\s+/g, ' ').trim() ?? '');
       if (!started) continue;

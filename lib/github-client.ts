@@ -7,7 +7,11 @@ import {
   type SectionState,
 } from './domain';
 import type { PullRequestIdentity } from './domain';
-import { extractDiffSummary, extractTimeline } from './github-dom';
+import {
+  extractDiffSummary,
+  extractTimeline,
+  hasRecognizableTimelineEvidence,
+} from './github-dom';
 import {
   GITHUB_ORIGIN,
   isValidPullRequestIdentity,
@@ -202,12 +206,6 @@ function sectionFromCompleteness<T>(data: T, isComplete: boolean, reasons: reado
     : { data, reason: reasons.join(' '), status: 'partial' };
 }
 
-function hasTimelineEvidence(document: Document): boolean {
-  return Boolean(document.querySelector(
-    '#discussion_bucket, .js-discussion, [data-testid="issue-viewer-issue-container"], .js-resolvable-timeline-thread-container, review-thread-collapsible, [id^="issuecomment-"], [id^="pullrequestreview-"], [data-review-request-action], [data-review-event], [data-reaction-content="eyes"], #js-timeline-progressive-loader',
-  ));
-}
-
 function isAuthenticationDocument(document: Document): boolean {
   const title = document.title.trim();
   const sessionForm = document.querySelector('form[action="/session"], form[action^="/session?"]');
@@ -291,7 +289,7 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
     const fragmentReasons = new Set<string>();
     const addFragmentReason = (reason: string) => fragmentReasons.add(reason);
     let retryableFailure = !files.ok;
-    if (!hasTimelineEvidence(conversation.document)) addFragmentReason('GitHub did not expose recognizable timeline evidence.');
+    if (!hasRecognizableTimelineEvidence(conversation.document)) addFragmentReason('GitHub did not expose recognizable timeline evidence.');
 
     let pinnedFocusedPullRequestId: string | undefined;
     const queuedFragments: NormalizedTimelineFragment[] = [];
@@ -338,7 +336,7 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
           continue;
         }
         timelineDocuments.push(result.document);
-        if (!hasTimelineEvidence(result.document)) addFragmentReason('A timeline fragment had no recognizable review data.');
+        if (!hasRecognizableTimelineEvidence(result.document)) addFragmentReason('A timeline fragment had no recognizable review data.');
         for (const fragment of extractTimeline(result.document, identity).nextTimelineFragments) {
           addFragment(fragment);
         }

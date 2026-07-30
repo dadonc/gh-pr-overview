@@ -6,6 +6,7 @@ import timelineHtml from '../test/fixtures/github/timeline.html?raw';
 import currentConversationHtml from '../test/fixtures/github/current/conversation.html?raw';
 import currentFilesHtml from '../test/fixtures/github/current/files.html?raw';
 import currentTimelineFragmentHtml from '../test/fixtures/github/current/timeline-fragment.html?raw';
+import currentAutomatedCommentHtml from '../test/fixtures/github/current/automated-comment.html?raw';
 import {
   createFetchLimiter,
   createGitHubClient,
@@ -150,6 +151,59 @@ describe('GitHub pull-request data pipeline', () => {
     expect(result.agents).toMatchObject({
       reason: expect.stringContaining('GitHub exposed an invalid timeline fragment.'),
       status: 'partial',
+    });
+  });
+
+  it('keeps a typed automated-comment fragment complete and aggregates its Copilot response', async () => {
+    const conversation = '<div id="discussion_bucket"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=automated-comment"></div>';
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      const value = String(url);
+      if (value.endsWith('/files')) return response(diffAggregateHtml, value);
+      if (value.includes('after=automated-comment')) return response(currentAutomatedCommentHtml, value);
+      return response(conversation, value);
+    });
+
+    const summary = await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(summary.reviewThreads).toEqual({
+      data: { resolvedOrOutdated: 0, total: 0, unresolved: 0 },
+      status: 'ready',
+    });
+    expect(summary.agents).toEqual({
+      data: [{
+        agentId: 'copilot',
+        requestSources: [],
+        responseCount: 1,
+        state: 'responded',
+      }],
+      status: 'ready',
+    });
+  });
+
+  it('keeps a phrase-based review event fragment complete and aggregates its Copilot request state', async () => {
+    const conversation = '<div id="discussion_bucket"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=started-reviewing"></div>';
+    const eventFragment = '<div class="TimelineItem" id="event-201"><strong>Copilot</strong> started reviewing</div>';
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      const value = String(url);
+      if (value.endsWith('/files')) return response(diffAggregateHtml, value);
+      if (value.includes('after=started-reviewing')) return response(eventFragment, value);
+      return response(conversation, value);
+    });
+
+    const summary = await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(summary.reviewThreads).toEqual({
+      data: { resolvedOrOutdated: 0, total: 0, unresolved: 0 },
+      status: 'ready',
+    });
+    expect(summary.agents).toEqual({
+      data: [{
+        agentId: 'copilot',
+        requestSources: ['started-reviewing'],
+        responseCount: 0,
+        state: 'requested',
+      }],
+      status: 'ready',
     });
   });
 
