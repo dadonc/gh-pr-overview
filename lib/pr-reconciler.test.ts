@@ -38,6 +38,34 @@ describe('page reconciler', () => {
     expect(isPullRequestListRoute(new URL('https://github.com/o/r/issues'))).toBe(false);
   });
 
+  it('reconciles a changed counter across 30 rows with bounded row-local queries', async () => {
+    const document = page(Array.from({ length: 30 }, (_, index) => {
+      const number = index + 1;
+      return row(number, `<a class="comments-link" aria-label="23 comments" href="/octo/demo/pull/${number}#issuecomment-${number}">23</a>`);
+    }).join(''));
+    const client = { loadPullRequest: vi.fn(async (_identity: { number: number }) => remote) };
+    const reconciler = createPageReconciler({
+      document,
+      client,
+      IntersectionObserver: undefined,
+      uiFactory: { mount() { return { remove: vi.fn(), update: vi.fn() }; } },
+    });
+
+    reconciler.reconcile();
+    await vi.waitFor(() => expect(client.loadPullRequest).toHaveBeenCalledTimes(30));
+
+    const rows = [...document.querySelectorAll<HTMLElement>('[id^="issue_"].js-issue-row')];
+    const rowQuerySpies = new Map(rows.map((row) => [row, vi.spyOn(row, 'querySelectorAll')]));
+    document.querySelector<HTMLElement>('#issue_15 .comments-link')!.setAttribute('aria-label', '24 comments');
+
+    reconciler.reconcile();
+
+    expect(
+      rows.reduce((total, row) => total + rowQuerySpies.get(row)!.mock.calls.length, 0),
+    ).toBeLessThan(120);
+    expect(client.loadPullRequest.mock.calls.filter(([identity]) => identity.number === 15)).toHaveLength(1);
+  });
+
   it('hides the native counter while mounting its value, restores it exactly on teardown, and restores authored accent', async () => {
     const document = page(row());
     const native = document.querySelector<HTMLAnchorElement>('.comments-link')!;
@@ -568,6 +596,39 @@ describe('page reconciler', () => {
     expect(mounted).toHaveLength(2);
     reconciler.cleanup();
     expect(document.querySelector('[data-pr-overview-zero-anchor]')).toBeNull();
+  });
+
+  it('remounts when a new ready counter supersedes a connected former counter', async () => {
+    const document = page(row());
+    const oldCounter = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));
+    const reconciler = createPageReconciler({
+      document,
+      client: { loadPullRequest: vi.fn(async () => remote) },
+      IntersectionObserver: undefined,
+      uiFactory: { mount },
+    });
+
+    reconciler.reconcile();
+    await vi.waitFor(() => expect(mount).toHaveBeenCalledOnce());
+
+    oldCounter.removeAttribute('aria-label');
+    oldCounter.removeAttribute('class');
+    oldCounter.setAttribute('href', '/octo/demo/pull/42/files');
+    const replacement = document.createElement('a');
+    replacement.className = 'comments-link';
+    replacement.setAttribute('aria-label', '24 comments');
+    replacement.setAttribute('href', '/octo/demo/pull/42#issuecomment-24');
+    replacement.textContent = '24';
+    oldCounter.parentElement!.replaceChildren(replacement);
+    document.querySelector('#issue_42')!.append(oldCounter);
+
+    reconciler.reconcile();
+    await vi.waitFor(() => expect(mount).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+
+    expect(oldCounter.hidden).toBe(false);
+    expect(replacement.hidden).toBe(true);
   });
 
   it('reparses malformed and dynamic native counters without retaining a stale total', async () => {

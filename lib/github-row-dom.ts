@@ -88,12 +88,20 @@ export function findPullRequestTitle(row: Element): {
   anchor: HTMLAnchorElement;
   identity: PullRequestIdentity;
 } | undefined {
-  if (!findPullRequestIdentity(row)) return undefined;
   const candidates = canonicalPullCandidates(row);
-  return candidates.find(({ anchor }) => anchor.matches(pullRequestTitleSelector)) ?? (() => {
-    const structurallyPossibleTitles = candidates.filter(({ anchor }) => !hasCommentCounterStructure(anchor));
-    return structurallyPossibleTitles.length === 1 ? structurallyPossibleTitles[0] : undefined;
-  })();
+  const semanticCandidates = candidates.filter(({ anchor }) => anchor.matches(pullRequestTitleSelector));
+  if (semanticCandidates.length > 0) {
+    const semanticIdentities = new Set(semanticCandidates.map(({ identity }) =>
+      `${identity.owner.toLowerCase()}/${identity.repository.toLowerCase()}#${identity.number}`,
+    ));
+    return semanticIdentities.size === 1 ? semanticCandidates[0] : undefined;
+  }
+  const identities = new Set(candidates.map(({ identity }) =>
+    `${identity.owner.toLowerCase()}/${identity.repository.toLowerCase()}#${identity.number}`,
+  ));
+  if (identities.size !== 1) return undefined;
+  const structurallyPossibleTitles = candidates.filter(({ anchor }) => !hasCommentCounterStructure(anchor));
+  return structurallyPossibleTitles.length === 1 ? structurallyPossibleTitles[0] : undefined;
 }
 
 interface NativeCommentCounterResolution {
@@ -129,29 +137,43 @@ function validatedNativeCounterHref(href: string | null, identity: PullRequestId
   return isAllowed ? href : undefined;
 }
 
-export function extractPullRequestRows(document: Document): PullRequestRowExtraction[] {
-  const viewerLogin = document.querySelector('meta[name="user-login"]')?.getAttribute('content')?.trim() || undefined;
-  return [...document.querySelectorAll<HTMLElement>('[id^="issue_"].js-issue-row')].flatMap((row) => {
-    const identity = findPullRequestIdentity(row);
-    if (!identity) return [];
-    const pullLink = findPullRequestTitle(row)?.anchor;
-    const counterResolution = resolveNativeCommentCounter(row, pullLink);
-    const recognizedCounter = counterResolution.counter;
-    const recognizedHref = recognizedCounter?.getAttribute('href');
-    const recognizedCount = nativeCommentCountFromLabel(recognizedCounter?.getAttribute('aria-label') ?? null);
-    const counterHref = validatedNativeCounterHref(recognizedHref ?? null, identity);
-    const nativeComments: NativeCommentCount = recognizedCount !== undefined && counterHref
-      ? { count: recognizedCount, href: counterHref, status: 'ready' }
-      : recognizedCounter
+export function extractPullRequestRow(
+  row: HTMLElement,
+  viewerLogin?: string,
+): PullRequestRowExtraction | undefined {
+  const identity = findPullRequestIdentity(row);
+  if (!identity) return undefined;
+  const pullLink = findPullRequestTitle(row)?.anchor;
+  const counterResolution = resolveNativeCommentCounter(row, pullLink);
+  const recognizedCounter = counterResolution.counter;
+  const recognizedHref = recognizedCounter?.getAttribute('href');
+  const recognizedCount = nativeCommentCountFromLabel(recognizedCounter?.getAttribute('aria-label') ?? null);
+  const counterHref = validatedNativeCounterHref(recognizedHref ?? null, identity);
+  const nativeComments: NativeCommentCount = recognizedCount !== undefined && counterHref
+    ? { count: recognizedCount, href: counterHref, status: 'ready' }
+    : recognizedCounter
+      ? { reason: 'GitHub comment counter is malformed.', status: 'error' }
+      : counterResolution.isAmbiguous
         ? { reason: 'GitHub comment counter is malformed.', status: 'error' }
-        : counterResolution.isAmbiguous
-          ? { reason: 'GitHub comment counter is malformed.', status: 'error' }
-          : { status: 'zero' };
-    return [{
-      authorLogin: row.querySelector('.opened-by a[data-hovercard-type="user"]')?.textContent?.trim() || undefined,
-      identity,
-      nativeComments,
-      viewerLogin,
-    }];
+        : { status: 'zero' };
+  return {
+    authorLogin: row.querySelector('.opened-by a[data-hovercard-type="user"]')?.textContent?.trim() || undefined,
+    identity,
+    nativeComments,
+    viewerLogin,
+  };
+}
+
+export function extractPullRequestRows(document: Document): PullRequestRowExtraction[] {
+  const viewerLogin =
+    document.querySelector('meta[name="user-login"]')
+      ?.getAttribute('content')
+      ?.trim() || undefined;
+
+  return [...document.querySelectorAll<HTMLElement>(
+    '[id^="issue_"].js-issue-row',
+  )].flatMap((row) => {
+    const extraction = extractPullRequestRow(row, viewerLogin);
+    return extraction ? [extraction] : [];
   });
 }

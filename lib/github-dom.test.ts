@@ -10,6 +10,7 @@ import prListHtml from '../test/fixtures/github/pr-list.html?raw';
 import timelineHtml from '../test/fixtures/github/timeline.html?raw';
 import {
   extractDiffSummary,
+  extractPullRequestRow,
   extractPullRequestRows,
   extractTimeline as extractTimelineWithIdentity,
 } from './github-dom';
@@ -23,6 +24,15 @@ const extractTimeline = (
 ) => extractTimelineWithIdentity(input, identity);
 
 describe('extractPullRequestRows', () => {
+  it('extracts a single row with a caller-supplied viewer login', () => {
+    const document = parse(prListHtml);
+    const row = document.querySelector<HTMLElement>('#issue_9001')!;
+
+    expect(extractPullRequestRow(row, 'octo-viewer')).toEqual(
+      extractPullRequestRows(document)[0],
+    );
+  });
+
   it('uses canonical pull links and native counters without reconstructing comments', () => {
     const rows = extractPullRequestRows(parse(prListHtml));
 

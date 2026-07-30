@@ -3,9 +3,8 @@ import type { PullRequestIdentity } from './domain';
 import type { PullRequestRemoteSummary } from './github-client';
 import type { PullRequestRowExtraction } from './github-dom';
 import {
-  extractPullRequestRows,
+  extractPullRequestRow,
   findNativeCommentCounter,
-  findPullRequestIdentity,
   findPullRequestTitle,
 } from './github-dom';
 
@@ -50,21 +49,21 @@ function identityKey(identity: PullRequestIdentity): string {
   return `${identity.owner.toLowerCase()}/${identity.repository.toLowerCase()}#${identity.number}`;
 }
 
-function canonicalIdentity(row: Element): string | undefined {
-  const identity = findPullRequestIdentity(row);
-  return identity ? identityKey(identity) : undefined;
-}
-
-function extractionForRow(document: Document, row: HTMLElement): PullRequestRowExtraction | undefined {
-  const key = canonicalIdentity(row);
-  return key ? extractPullRequestRows(document).find((candidate) => identityKey(candidate.identity) === key) : undefined;
-}
-
 /** Mirrors the extractor's counter semantics and never mistakes the PR title for a counter. */
 function nativeCounter(row: HTMLElement, extraction: PullRequestRowExtraction): HTMLAnchorElement | undefined {
   if (extraction.nativeComments.status === 'zero') return undefined;
   const title = findPullRequestTitle(row)?.anchor;
   return findNativeCommentCounter(row, title);
+}
+
+function matchesReadyNativeCounter(anchor: HTMLElement, extraction: PullRequestRowExtraction): boolean {
+  if (extraction.nativeComments.status !== 'ready' || !(anchor instanceof HTMLAnchorElement)) return false;
+  const label = anchor.getAttribute('aria-label');
+  const count = label?.match(/^\s*(\d{1,3}(?:,\d{3})+|\d+)\s+comments?\s*$/i)?.[1];
+  return count !== undefined &&
+    Number.isSafeInteger(Number(count.replaceAll(',', ''))) &&
+    Number(count.replaceAll(',', '')) === extraction.nativeComments.count &&
+    anchor.getAttribute('href') === extraction.nativeComments.href;
 }
 
 function totalComments(extraction: PullRequestRowExtraction): SectionState<TotalComments> {
@@ -123,7 +122,7 @@ class RowController {
     this.anchor = counter ?? this.createZeroAnchor();
     this.anchorSnapshot = this.snapshot(this.anchor);
     this.pendingProps = this.props(loadingSummary(extraction));
-    this.nativeObserver = new MutationObserver(() => this.refreshNative());
+    this.nativeObserver = new MutationObserver(() => this.refresh(this.currentExtraction));
     this.nativeObserver.observe(this.anchor, { attributes: true, attributeFilter: ['aria-label', 'href'], childList: true, characterData: true, subtree: true });
     let mounting: MountedCard | Promise<MountedCard>;
     try {
@@ -194,10 +193,8 @@ class RowController {
     return { conversationHref: base, filesHref: `${base}/files`, summary };
   }
 
-  private refreshNative(): void {
+  private refreshNative(extraction: PullRequestRowExtraction): void {
     if (this.disposed) return;
-    const extraction = extractionForRow(this.document, this.row);
-    if (!extraction) return;
     if (identityKey(extraction.identity) !== identityKey(this.currentExtraction.identity)) return;
     this.currentExtraction = extraction;
     this.render(this.props({ ...this.pendingProps.summary, totalComments: totalComments(extraction) }));
@@ -210,12 +207,19 @@ class RowController {
 
   matches(extraction: PullRequestRowExtraction): boolean {
     if (this.disposed) return false;
+    if (identityKey(extraction.identity) !== identityKey(this.currentExtraction.identity)) return false;
+    if (
+      extraction.nativeComments.status === 'zero' &&
+      this.anchor === this.extensionAnchor &&
+      this.row.contains(this.anchor)
+    ) return true;
+    if (this.row.contains(this.anchor) && matchesReadyNativeCounter(this.anchor, extraction)) return true;
     const nextAnchor = nativeCounter(this.row, extraction);
-    return identityKey(extraction.identity) === identityKey(this.currentExtraction.identity) && (nextAnchor ?? this.extensionAnchor) === this.anchor;
+    return (nextAnchor ?? this.extensionAnchor) === this.anchor;
   }
 
-  refresh(): void {
-    this.refreshNative();
+  refresh(extraction: PullRequestRowExtraction): void {
+    this.refreshNative(extraction);
   }
 
   start(): void {
@@ -226,7 +230,7 @@ class RowController {
     const abortController = new AbortController();
     this.abortController = abortController;
     const matchingExtraction = () => {
-      const extraction = extractionForRow(this.document, this.row);
+      const extraction = extractPullRequestRow(this.row, this.currentExtraction.viewerLogin);
       return extraction && identityKey(extraction.identity) === requestedKey && this.matches(extraction)
         ? extraction
         : undefined;
@@ -303,19 +307,27 @@ export function createPageReconciler(options: PageReconcilerOptions) {
     observe();
     if (!isPullRequestListRoute(options.document.location)) { clear(); return; }
     const rows = [...options.document.querySelectorAll<HTMLElement>('[id^="issue_"].js-issue-row')];
+    const viewerLogin =
+      options.document.querySelector('meta[name="user-login"]')
+        ?.getAttribute('content')
+        ?.trim() || undefined;
+    const extractions = new Map(rows.flatMap((row) => {
+      const extraction = extractPullRequestRow(row, viewerLogin);
+      return extraction ? [[row, extraction] as const] : [];
+    }));
     const found = new Set(rows);
     for (const [row, controller] of controllers) {
-      const extraction = row.isConnected ? extractionForRow(options.document, row) : undefined;
+      const extraction = row.isConnected ? extractions.get(row) : undefined;
       if (!found.has(row) || !extraction || !controller.matches(extraction)) {
         controller.dispose();
         controllers.delete(row);
       } else {
-        controller.refresh();
+        controller.refresh(extraction);
       }
     }
     for (const row of rows) {
       if (controllers.has(row)) continue;
-      const extraction = extractionForRow(options.document, row);
+      const extraction = extractions.get(row);
       if (!extraction) continue;
       controllers.set(row, new RowController(options.document, row, extraction, options.client, options.uiFactory, () => currentEpoch, currentEpoch, options.IntersectionObserver));
     }
