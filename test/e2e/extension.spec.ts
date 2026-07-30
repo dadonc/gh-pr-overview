@@ -5,6 +5,7 @@ interface NativeCounterSnapshot {
   ariaHidden: string | null;
   display: string;
   hidden: boolean;
+  hiddenAttribute: string | null;
   style: string | null;
   tabindex: string | null;
   visibility: string;
@@ -16,6 +17,7 @@ function readNativeCounterSnapshot(counter: HTMLAnchorElement): NativeCounterSna
     ariaHidden: counter.getAttribute('aria-hidden'),
     display: styles.display,
     hidden: counter.hidden,
+    hiddenAttribute: counter.getAttribute('hidden'),
     style: counter.getAttribute('style'),
     tabindex: counter.getAttribute('tabindex'),
     visibility: styles.visibility,
@@ -43,6 +45,7 @@ test('boots the unpacked extension with a rendered, isolated shadow card', async
     ariaHidden: null,
     display: 'inline',
     hidden: false,
+    hiddenAttribute: null,
     style: null,
     tabindex: null,
     visibility: 'visible',

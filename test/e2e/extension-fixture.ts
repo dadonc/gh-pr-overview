@@ -27,6 +27,7 @@ interface NativeCounterSnapshot {
   ariaHidden: string | null;
   display: string;
   hidden: boolean;
+  hiddenAttribute: string | null;
   style: string | null;
   tabindex: string | null;
   visibility: string;
@@ -151,13 +152,7 @@ export const test = base.extend<{ extension: ExtensionHarness }>({
       await use({
         currentRowHtml: currentRow(fixtures.prList),
         async expectNoFailures() {
-          await Promise.race([
-            page.waitForLoadState('networkidle'),
-            new Promise<never>((_resolve, reject) => setTimeout(
-              () => reject(new Error('Timed out waiting for browser network idle.')),
-              QUIESCENCE_TIMEOUT_MS,
-            )),
-          ]);
+          await page.waitForLoadState('networkidle', { timeout: QUIESCENCE_TIMEOUT_MS });
           const deadline = Date.now() + QUIESCENCE_TIMEOUT_MS;
           let stableRounds = 0;
           while (stableRounds < STABLE_QUIET_ROUNDS && Date.now() < deadline) {
@@ -209,6 +204,7 @@ export const test = base.extend<{ extension: ExtensionHarness }>({
                   ariaHidden: counter.getAttribute('aria-hidden'),
                   display: styles.display,
                   hidden: counter.hidden,
+                  hiddenAttribute: counter.getAttribute('hidden'),
                   style: counter.getAttribute('style'),
                   tabindex: counter.getAttribute('tabindex'),
                   visibility: styles.visibility,
