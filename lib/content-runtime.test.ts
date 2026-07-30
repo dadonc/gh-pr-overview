@@ -28,7 +28,7 @@ function startRuntime() {
   const mount = vi.fn(() => {
     const remove = vi.fn();
     removes.push(remove);
-    return { remove, update: vi.fn() };
+    return { isConnected: () => true, remove, update: vi.fn() };
   });
   startContentRuntime({
     ctx: {

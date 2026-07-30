@@ -19,6 +19,7 @@ export interface CardProps {
 }
 
 export interface MountedCard {
+  isConnected(): boolean;
   remove(): void;
   update(props: CardProps): void;
 }
@@ -104,6 +105,7 @@ class RowController {
   private readonly authoredAttribute: string | null;
   private started = false;
   private disposed = false;
+  private pendingMountedUiRemoval = false;
 
   constructor(
     private readonly document: Document,
@@ -113,6 +115,8 @@ class RowController {
     private readonly uiFactory: CardUiFactory,
     private readonly epoch: () => number,
     private readonly ownEpoch: number,
+    private readonly ignoreOwnedRemoval: (node: Node) => void,
+    private readonly requestReconcile: () => void,
     IntersectionObserverCtor: ObserverConstructor | undefined,
   ) {
     this.currentExtraction = extraction;
@@ -129,6 +133,13 @@ class RowController {
     }
     Promise.resolve(mounting).then((mounted) => {
       if (this.disposed || !this.ownsConnectedMountAnchor()) { mounted.remove(); return; }
+      if (!mounted.isConnected()) {
+        const shouldRetry = this.pendingMountedUiRemoval;
+        mounted.remove();
+        this.dispose();
+        if (shouldRetry) this.requestReconcile();
+        return;
+      }
       this.mounted = mounted;
       this.hideCurrentNativeCounter();
       this.setAuthoredAttribute();
@@ -181,6 +192,10 @@ class RowController {
   private ownsConnectedMountAnchor(): boolean {
     return this.mountAnchor.isConnected &&
       this.mountAnchor.closest<HTMLElement>('[id^="issue_"].js-issue-row') === this.row;
+  }
+
+  private ownsConnectedMountedUi(): boolean {
+    return !this.mounted || this.mounted.isConnected();
   }
 
   private snapshot(element: Element): AttributeSnapshot {
@@ -247,11 +262,16 @@ class RowController {
   matches(extraction: PullRequestRowExtraction): boolean {
     return !this.disposed &&
       identityKey(extraction.identity) === identityKey(this.currentExtraction.identity) &&
-      this.ownsConnectedMountAnchor();
+      this.ownsConnectedMountAnchor() &&
+      this.ownsConnectedMountedUi();
   }
 
   refresh(extraction: PullRequestRowExtraction, nativeDirty: boolean): void {
     this.refreshNative(extraction, nativeDirty);
+  }
+
+  noteMountedUiRemoval(): void {
+    if (!this.mounted) this.pendingMountedUiRemoval = true;
   }
 
   start(): void {
@@ -292,6 +312,7 @@ class RowController {
     this.intersectionObserver?.disconnect();
     this.mounted?.remove();
     this.restoreNativeCounter();
+    if (this.mountAnchor.isConnected) this.ignoreOwnedRemoval(this.mountAnchor);
     this.mountAnchor.remove();
     setAttributeExactly(this.row, 'data-pr-overview-authored', this.authoredAttribute);
   }
@@ -304,6 +325,8 @@ export function isPullRequestListRoute(url: Pick<Location, 'pathname'>): boolean
 export function createPageReconciler(options: PageReconcilerOptions) {
   const controllers = new Map<HTMLElement, RowController>();
   const nativeDirtyRows = new Set<HTMLElement>();
+  const mountedUiDirtyRows = new Set<HTMLElement>();
+  const ignoredOwnedRemovals = new WeakSet<Node>();
   let currentEpoch = 0;
   let observer: MutationObserver | undefined;
   let queued = false;
@@ -316,18 +339,26 @@ export function createPageReconciler(options: PageReconcilerOptions) {
   const observe = () => {
     if (observer) return;
     observer = new MutationObserver((records) => {
-      if (records.every((record) => {
-        if (record.target.nodeType === 1 && (record.target as Element).closest('github-pr-overview')) return true;
-        if (record.type !== 'childList') return false;
-        const changedNodes = [...record.addedNodes, ...record.removedNodes];
-        return changedNodes.length > 0 && changedNodes.every((node) =>
+      const relevantRecords = records.filter((record) => {
+        if (record.target.nodeType === 1 && (record.target as Element).closest('github-pr-overview')) return false;
+        if (record.type !== 'childList') return true;
+        const addedNodes = [...record.addedNodes];
+        const removedNodes = [...record.removedNodes];
+        if (removedNodes.length > 0) return !removedNodes.every((node) => ignoredOwnedRemovals.delete(node));
+        return !(addedNodes.length > 0 && addedNodes.every((node) =>
           node.nodeType === 1 && Boolean((node as Element).matches('github-pr-overview, [data-pr-overview-mount-anchor]') || (node as Element).closest('github-pr-overview')),
-        );
-      })) return;
-      for (const record of records) {
+        ));
+      });
+      if (relevantRecords.length === 0) return;
+      for (const record of relevantRecords) {
         const target = record.target.nodeType === 1 ? record.target as Element : record.target.parentElement;
         const row = target?.closest<HTMLElement>('[id^="issue_"].js-issue-row');
-        if (row) nativeDirtyRows.add(row);
+        if (!row) continue;
+        nativeDirtyRows.add(row);
+        if (record.type === 'childList' && [...record.removedNodes].some((node) =>
+          node.nodeType === 1 &&
+          ((node as Element).matches('github-pr-overview') || Boolean((node as Element).querySelector('github-pr-overview'))),
+        )) mountedUiDirtyRows.add(row);
       }
       queueReconcile();
     });
@@ -344,6 +375,7 @@ export function createPageReconciler(options: PageReconcilerOptions) {
     for (const controller of controllers.values()) controller.dispose();
     controllers.clear();
     nativeDirtyRows.clear();
+    mountedUiDirtyRows.clear();
   };
   const reconcile = () => {
     observe();
@@ -361,10 +393,12 @@ export function createPageReconciler(options: PageReconcilerOptions) {
     for (const [row, controller] of controllers) {
       const extraction = row.isConnected ? extractions.get(row) : undefined;
       const nativeDirty = nativeDirtyRows.delete(row);
+      const mountedUiDirty = mountedUiDirtyRows.delete(row);
       if (!found.has(row) || !extraction || !controller.matches(extraction)) {
         controller.dispose();
         controllers.delete(row);
       } else {
+        if (mountedUiDirty) controller.noteMountedUiRemoval();
         controller.refresh(extraction, nativeDirty);
       }
     }
@@ -372,9 +406,21 @@ export function createPageReconciler(options: PageReconcilerOptions) {
       if (controllers.has(row)) continue;
       const extraction = extractions.get(row);
       if (!extraction) continue;
-      controllers.set(row, new RowController(options.document, row, extraction, options.client, options.uiFactory, () => currentEpoch, currentEpoch, options.IntersectionObserver));
+      controllers.set(row, new RowController(
+        options.document,
+        row,
+        extraction,
+        options.client,
+        options.uiFactory,
+        () => currentEpoch,
+        currentEpoch,
+        (node) => ignoredOwnedRemovals.add(node),
+        queueReconcile,
+        options.IntersectionObserver,
+      ));
     }
     nativeDirtyRows.clear();
+    mountedUiDirtyRows.clear();
   };
   return {
     cleanup() { stopped = true; observer?.disconnect(); observer = undefined; clear(); },

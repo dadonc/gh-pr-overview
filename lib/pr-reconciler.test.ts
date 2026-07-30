@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import currentPrListHtml from '../test/fixtures/github/current/pr-list.html?raw';
 import type { PullRequestRemoteSummary } from './github-client';
-import { createPageReconciler, isPullRequestListRoute, type CardProps, type ObserverConstructor } from './pr-reconciler';
+import { createPageReconciler, isPullRequestListRoute, type CardProps, type MountedCard, type ObserverConstructor } from './pr-reconciler';
 
 const remote: PullRequestRemoteSummary = {
   agents: { data: [], status: 'ready' },
@@ -61,7 +61,7 @@ describe('page reconciler', () => {
       document: page(row()),
       client: { loadPullRequest: vi.fn(async () => remote) },
       IntersectionObserver: undefined,
-      uiFactory: { mount() { return { remove: vi.fn(), update: vi.fn() }; } },
+      uiFactory: { mount() { return { isConnected: () => true, remove: vi.fn(), update: vi.fn() }; } },
     });
 
     expect(reconciler).toEqual(expect.objectContaining({ cleanup: expect.any(Function), reconcile: expect.any(Function) }));
@@ -71,7 +71,7 @@ describe('page reconciler', () => {
 
   it('mount marker lives in the current row main content and never in native metadata', async () => {
     const document = page(currentPrListHtml);
-    const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));
+    const mount = vi.fn(() => ({ isConnected: () => true, remove: vi.fn(), update: vi.fn() }));
     const reconciler = createPageReconciler({
       document,
       client: { loadPullRequest: vi.fn(async () => remote) },
@@ -112,7 +112,7 @@ describe('page reconciler', () => {
         </div>
       </div>
     `);
-    const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));
+    const mount = vi.fn(() => ({ isConnected: () => true, remove: vi.fn(), update: vi.fn() }));
     const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount } });
 
     reconciler.reconcile();
@@ -133,9 +133,9 @@ describe('page reconciler', () => {
     const rowElement = document.querySelector<HTMLElement>('#issue_42')!;
     const native = document.querySelector<HTMLAnchorElement>('.comments-link')!;
     let resolveRemote!: (value: PullRequestRemoteSummary) => void;
-    let resolveMount!: (card: { remove(): void; update(): void }) => void;
+    let resolveMount!: (card: MountedCard) => void;
     const remoteResult = new Promise<PullRequestRemoteSummary>((resolve) => { resolveRemote = resolve; });
-    const mountResult = new Promise<{ remove(): void; update(): void }>((resolve) => { resolveMount = resolve; });
+    const mountResult = new Promise<MountedCard>((resolve) => { resolveMount = resolve; });
     const remove = vi.fn();
     const update = vi.fn();
     const reconciler = createPageReconciler({
@@ -148,7 +148,7 @@ describe('page reconciler', () => {
     reconciler.reconcile();
     rowElement.remove();
     resolveRemote(remote);
-    resolveMount({ remove, update });
+    resolveMount({ isConnected: () => false, remove, update });
     await Promise.resolve();
     await Promise.resolve();
 
@@ -163,7 +163,7 @@ describe('page reconciler', () => {
     const row = document.querySelector<HTMLElement>('#issue_43')!;
     document.querySelector('#issue_42')!.remove();
     const client = { loadPullRequest: vi.fn(async () => remote) };
-    const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));
+    const mount = vi.fn(() => ({ isConnected: () => true, remove: vi.fn(), update: vi.fn() }));
     const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount } });
 
     reconciler.reconcile();
@@ -201,7 +201,7 @@ describe('page reconciler', () => {
     counter.setAttribute('style', 'display: inline');
     const expected = snapshotAttributes(counter);
     const client = { loadPullRequest: vi.fn(async () => remote) };
-    const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));
+    const mount = vi.fn(() => ({ isConnected: () => true, remove: vi.fn(), update: vi.fn() }));
     const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount } });
 
     reconciler.reconcile();
@@ -232,7 +232,7 @@ describe('page reconciler', () => {
     const updates: CardProps[] = [];
     const mount = vi.fn((_anchor, props: CardProps) => {
       updates.push(props);
-      return { remove: vi.fn(), update(next: CardProps) { updates.push(next); } };
+      return { isConnected: () => true, remove: vi.fn(), update(next: CardProps) { updates.push(next); } };
     });
     const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount } });
 
@@ -264,7 +264,7 @@ describe('page reconciler', () => {
       document,
       client: { loadPullRequest: vi.fn(async () => remote) },
       IntersectionObserver: undefined,
-      uiFactory: { mount(_anchor, props) { totals.push(props.summary.totalComments); return { remove: vi.fn(), update(next) { totals.push(next.summary.totalComments); } }; } },
+      uiFactory: { mount(_anchor, props) { totals.push(props.summary.totalComments); return { isConnected: () => true, remove: vi.fn(), update(next) { totals.push(next.summary.totalComments); } }; } },
     });
 
     reconciler.reconcile();
@@ -284,7 +284,7 @@ describe('page reconciler', () => {
       document,
       client: { loadPullRequest: vi.fn(async () => remote) },
       IntersectionObserver: undefined,
-      uiFactory: { mount(_anchor, props) { totals.push(props.summary.totalComments); return { remove: vi.fn(), update(next) { totals.push(next.summary.totalComments); } }; } },
+      uiFactory: { mount(_anchor, props) { totals.push(props.summary.totalComments); return { isConnected: () => true, remove: vi.fn(), update(next) { totals.push(next.summary.totalComments); } }; } },
     });
 
     reconciler.reconcile();
@@ -307,7 +307,7 @@ describe('page reconciler', () => {
     original.setAttribute('style', 'display: inline');
     const originalSnapshot = snapshotAttributes(original);
     const client = { loadPullRequest: vi.fn(async () => remote) };
-    const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));
+    const mount = vi.fn(() => ({ isConnected: () => true, remove: vi.fn(), update: vi.fn() }));
     const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount } });
 
     reconciler.reconcile();
@@ -335,8 +335,8 @@ describe('page reconciler', () => {
     const row = document.querySelector<HTMLElement>('#issue_42')!;
     document.querySelector('#issue_43')!.remove();
     const original = row.querySelector<HTMLAnchorElement>('[aria-label="2 comments"]')!;
-    let resolveMount!: (card: { remove(): void; update(): void }) => void;
-    const pendingMount = new Promise<{ remove(): void; update(): void }>((resolve) => { resolveMount = resolve; });
+    let resolveMount!: (card: MountedCard) => void;
+    const pendingMount = new Promise<MountedCard>((resolve) => { resolveMount = resolve; });
     const mount = vi.fn(() => pendingMount);
     const client = { loadPullRequest: vi.fn(async () => remote) };
     const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount } });
@@ -357,10 +357,201 @@ describe('page reconciler', () => {
     expect(mount).toHaveBeenCalledOnce();
     expect(client.loadPullRequest).toHaveBeenCalledOnce();
 
-    resolveMount({ remove: vi.fn(), update: vi.fn() });
+    resolveMount({ isConnected: () => true, remove: vi.fn(), update: vi.fn() });
     await vi.waitFor(() => expect(replacement.hidden).toBe(true));
     reconciler.cleanup();
     expectSnapshot(replacement, replacementSnapshot);
+  });
+
+  it('automatically replaces a controller when only its mounted host is removed', async () => {
+    const document = page(row());
+    const native = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    native.setAttribute('aria-hidden', 'github-aria');
+    native.setAttribute('tabindex', '7');
+    native.setAttribute('style', 'display: inline');
+    const expected = snapshotAttributes(native);
+    const client = { loadPullRequest: vi.fn(async () => remote) };
+    const cards: Array<{
+      host: HTMLElement;
+      remove: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+      mounted: MountedCard;
+    }> = [];
+    let resolveReplacement!: (card: MountedCard) => void;
+    const mount = vi.fn((anchor: Element) => {
+      const host = document.createElement('github-pr-overview');
+      anchor.after(host);
+      const remove = vi.fn(() => host.remove());
+      const update = vi.fn();
+      const mounted = { isConnected: () => host.isConnected, remove, update };
+      cards.push({ host, mounted, remove, update });
+      return cards.length === 1
+        ? mounted
+        : new Promise<MountedCard>((resolve) => { resolveReplacement = resolve; });
+    });
+    const reconciler = createPageReconciler({
+      document,
+      client,
+      IntersectionObserver: undefined,
+      uiFactory: { mount },
+    });
+
+    reconciler.reconcile();
+    await vi.waitFor(() => expect(native.getAttribute('aria-hidden')).toBe('true'));
+    cards[0]!.host.remove();
+
+    await vi.waitFor(() => expect(mount).toHaveBeenCalledTimes(2));
+    expect(cards[0]!.remove).toHaveBeenCalledOnce();
+    expectSnapshot(native, expected);
+    expect(client.loadPullRequest).toHaveBeenCalledTimes(2);
+    expect(document.querySelectorAll('github-pr-overview')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
+
+    resolveReplacement(cards[1]!.mounted);
+    await vi.waitFor(() => expect(native.getAttribute('aria-hidden')).toBe('true'));
+    expect(document.querySelectorAll('github-pr-overview')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
+    reconciler.cleanup();
+    expectSnapshot(native, expected);
+  });
+
+  it('automatically replaces a pending controller when only its marker is removed', async () => {
+    const document = page(row());
+    const native = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    const client = { loadPullRequest: vi.fn(async () => remote) };
+    const cards: Array<{
+      host: HTMLElement;
+      remove: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+      mounted: MountedCard;
+      resolve(card: MountedCard): void;
+    }> = [];
+    const mount = vi.fn((anchor: Element) => {
+      const host = document.createElement('github-pr-overview');
+      anchor.after(host);
+      const remove = vi.fn(() => host.remove());
+      const update = vi.fn();
+      const mounted = { isConnected: () => host.isConnected, remove, update };
+      let resolve!: (card: MountedCard) => void;
+      const pending = new Promise<MountedCard>((done) => { resolve = done; });
+      cards.push({ host, mounted, remove, resolve, update });
+      return pending;
+    });
+    const reconciler = createPageReconciler({
+      document,
+      client,
+      IntersectionObserver: undefined,
+      uiFactory: { mount },
+    });
+
+    reconciler.reconcile();
+    document.querySelector('[data-pr-overview-mount-anchor]')!.remove();
+
+    await vi.waitFor(() => expect(mount).toHaveBeenCalledTimes(2));
+    expect(native.hidden).toBe(false);
+    expect(client.loadPullRequest).toHaveBeenCalledTimes(2);
+    expect(document.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
+
+    cards[0]!.resolve(cards[0]!.mounted);
+    await vi.waitFor(() => expect(cards[0]!.remove).toHaveBeenCalledOnce());
+    expect(cards[0]!.update).not.toHaveBeenCalled();
+    expect(native.hidden).toBe(false);
+
+    cards[1]!.resolve(cards[1]!.mounted);
+    await vi.waitFor(() => expect(native.hidden).toBe(true));
+    expect(cards[1]!.update).toHaveBeenCalled();
+    expect(document.querySelectorAll('github-pr-overview')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
+    expect(mount).toHaveBeenCalledTimes(2);
+    expect(client.loadPullRequest).toHaveBeenCalledTimes(2);
+    reconciler.cleanup();
+  });
+
+  it('automatically replaces a pending controller whose mounted host was removed before resolution', async () => {
+    const document = page(row());
+    const native = document.querySelector<HTMLAnchorElement>('.comments-link')!;
+    native.setAttribute('aria-hidden', 'github-aria');
+    native.setAttribute('tabindex', '7');
+    native.setAttribute('style', 'display: inline');
+    const expected = snapshotAttributes(native);
+    const client = { loadPullRequest: vi.fn(async () => remote) };
+    const cards: Array<{
+      host: HTMLElement;
+      remove: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+      mounted: MountedCard;
+      resolve(card: MountedCard): void;
+    }> = [];
+    const mount = vi.fn((anchor: Element) => {
+      const host = document.createElement('github-pr-overview');
+      anchor.after(host);
+      const remove = vi.fn(() => host.remove());
+      const update = vi.fn();
+      const mounted = { isConnected: () => host.isConnected, remove, update };
+      let resolve!: (card: MountedCard) => void;
+      const pending = new Promise<MountedCard>((done) => { resolve = done; });
+      cards.push({ host, mounted, remove, resolve, update });
+      return pending;
+    });
+    const reconciler = createPageReconciler({
+      document,
+      client,
+      IntersectionObserver: undefined,
+      uiFactory: { mount },
+    });
+
+    reconciler.reconcile();
+    cards[0]!.host.remove();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    cards[0]!.resolve(cards[0]!.mounted);
+
+    await vi.waitFor(() => expect(mount).toHaveBeenCalledTimes(2));
+    expect(cards[0]!.remove).toHaveBeenCalledOnce();
+    expect(cards[0]!.update).not.toHaveBeenCalled();
+    expectSnapshot(native, expected);
+    expect(client.loadPullRequest).toHaveBeenCalledTimes(2);
+    expect(document.querySelectorAll('github-pr-overview')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
+
+    cards[1]!.resolve(cards[1]!.mounted);
+    await vi.waitFor(() => expect(native.getAttribute('aria-hidden')).toBe('true'));
+    expect(cards[1]!.update).toHaveBeenCalledOnce();
+    expect(document.querySelectorAll('github-pr-overview')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
+    expect(mount).toHaveBeenCalledTimes(2);
+    expect(client.loadPullRequest).toHaveBeenCalledTimes(2);
+    reconciler.cleanup();
+    expectSnapshot(native, expected);
+  });
+
+  it('rejects a disconnected mounted host during explicit reconciliation', async () => {
+    const document = page(row());
+    const mount = vi.fn((anchor: Element) => {
+      const host = document.createElement('github-pr-overview');
+      anchor.after(host);
+      return {
+        isConnected: () => host.isConnected,
+        remove() { host.remove(); },
+        update: vi.fn(),
+      };
+    });
+    const reconciler = createPageReconciler({
+      document,
+      client: { loadPullRequest: vi.fn(async () => remote) },
+      IntersectionObserver: undefined,
+      uiFactory: { mount },
+    });
+
+    reconciler.reconcile();
+    await Promise.resolve();
+    document.querySelector('github-pr-overview')!.remove();
+    reconciler.reconcile();
+
+    expect(mount).toHaveBeenCalledTimes(2);
+    await Promise.resolve();
+    expect(document.querySelectorAll('github-pr-overview')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
+    reconciler.cleanup();
   });
 
   it('reconciles a changed counter across 30 rows with bounded row-local queries', async () => {
@@ -373,7 +564,7 @@ describe('page reconciler', () => {
       document,
       client,
       IntersectionObserver: undefined,
-      uiFactory: { mount() { return { remove: vi.fn(), update: vi.fn() }; } },
+      uiFactory: { mount() { return { isConnected: () => true, remove: vi.fn(), update: vi.fn() }; } },
     });
 
     reconciler.reconcile();
@@ -397,8 +588,8 @@ describe('page reconciler', () => {
     document.querySelector('#issue_42')!.setAttribute('data-pr-overview-authored', 'github-original');
     native.hidden = false; native.setAttribute('aria-hidden', 'false'); native.setAttribute('tabindex', '0');
     const client = { loadPullRequest: vi.fn(async () => remote) };
-    const mounts: Array<{ remove: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> }> = [];
-    const reconciler = createPageReconciler({ document, client, IntersectionObserver: Observer, uiFactory: { mount(_anchor, props) { expect(props.summary.totalComments).toEqual({ data: { count: 23, href: '/octo/demo/pull/42#issuecomment-23' }, status: 'ready' }); const mount = { remove: vi.fn(), update: vi.fn() }; mounts.push(mount); return mount; } } });
+    const mounts: Array<MountedCard & { remove: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> }> = [];
+    const reconciler = createPageReconciler({ document, client, IntersectionObserver: Observer, uiFactory: { mount(_anchor, props) { expect(props.summary.totalComments).toEqual({ data: { count: 23, href: '/octo/demo/pull/42#issuecomment-23' }, status: 'ready' }); const mount = { isConnected: () => true, remove: vi.fn(), update: vi.fn() }; mounts.push(mount); return mount; } } });
 
     reconciler.reconcile();
     FakeObserver.instances.at(-1)!.fire(document.querySelector('#issue_42')!);
@@ -421,7 +612,7 @@ describe('page reconciler', () => {
     const title = document.querySelector<HTMLAnchorElement>('.Link--primary')!;
     const counter = document.querySelector<HTMLAnchorElement>('[aria-label="23 comments"]')!;
     let mountedAt: Element | undefined;
-    const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount(anchor) { mountedAt = anchor; return { remove: vi.fn(), update: vi.fn() }; } } });
+    const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount(anchor) { mountedAt = anchor; return { isConnected: () => true, remove: vi.fn(), update: vi.fn() }; } } });
     reconciler.reconcile();
     await Promise.resolve();
     expect(title.hidden).toBe(false);
@@ -480,7 +671,7 @@ describe('page reconciler', () => {
       uiFactory: {
         mount(anchor, props) {
           initial = { anchor, props };
-          return { remove: vi.fn(), update: vi.fn() };
+          return { isConnected: () => true, remove: vi.fn(), update: vi.fn() };
         },
       },
     });
@@ -517,7 +708,7 @@ describe('page reconciler', () => {
       uiFactory: {
         mount(anchor, props) {
           initial = { anchor, props };
-          return { remove: vi.fn(), update: vi.fn() };
+          return { isConnected: () => true, remove: vi.fn(), update: vi.fn() };
         },
       },
     });
@@ -558,7 +749,7 @@ describe('page reconciler', () => {
         uiFactory: {
           mount(anchor, props) {
             initial = { anchor, props };
-            return { remove: vi.fn(), update: vi.fn() };
+            return { isConnected: () => true, remove: vi.fn(), update: vi.fn() };
           },
         },
       });
@@ -599,7 +790,7 @@ describe('page reconciler', () => {
         uiFactory: {
           mount(anchor, props) {
             initial = { anchor, props };
-            return { remove: vi.fn(), update: vi.fn() };
+            return { isConnected: () => true, remove: vi.fn(), update: vi.fn() };
           },
         },
       });
@@ -661,7 +852,7 @@ describe('page reconciler', () => {
         uiFactory: {
           mount(anchor, props) {
             initial = { anchor, props };
-            return { remove: vi.fn(), update: vi.fn() };
+            return { isConnected: () => true, remove: vi.fn(), update: vi.fn() };
           },
         },
       });
@@ -689,7 +880,7 @@ describe('page reconciler', () => {
       `<a href="${untrustedHref}">Untrusted PR-shaped link</a><a class="Link--primary"`,
     ));
     const client = { loadPullRequest: vi.fn(async (_identity: { number: number }) => remote) };
-    const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));
+    const mount = vi.fn(() => ({ isConnected: () => true, remove: vi.fn(), update: vi.fn() }));
     const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount } });
 
     reconciler.reconcile();
@@ -709,7 +900,7 @@ describe('page reconciler', () => {
       uiFactory: {
         mount(anchor) {
           mountedAt = anchor;
-          return { remove: vi.fn(), update: vi.fn() };
+          return { isConnected: () => true, remove: vi.fn(), update: vi.fn() };
         },
       },
     });
@@ -737,7 +928,7 @@ describe('page reconciler', () => {
         mount(anchor, props) {
           mountedAt = anchor;
           initial = props;
-          return { remove: vi.fn(), update: vi.fn() };
+          return { isConnected: () => true, remove: vi.fn(), update: vi.fn() };
         },
       },
     });
@@ -762,7 +953,7 @@ describe('page reconciler', () => {
       uiFactory: {
         mount(anchor) {
           mountedAt = anchor;
-          return { remove: vi.fn(), update: vi.fn() };
+          return { isConnected: () => true, remove: vi.fn(), update: vi.fn() };
         },
       },
     });
@@ -785,7 +976,7 @@ describe('page reconciler', () => {
       uiFactory: {
         mount(anchor) {
           mountedAt = anchor;
-          return { remove: vi.fn(), update: vi.fn() };
+          return { isConnected: () => true, remove: vi.fn(), update: vi.fn() };
         },
       },
     });
@@ -801,7 +992,7 @@ describe('page reconciler', () => {
     const document = page(row(46, '<a class="comments-link" aria-label="many comments">many</a>'));
     const malformed = document.querySelector<HTMLAnchorElement>('.comments-link')!;
     let initial: any;
-    const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount(anchor, props) { initial = { anchor, props }; return { remove: vi.fn(), update: vi.fn() }; } } });
+    const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount(anchor, props) { initial = { anchor, props }; return { isConnected: () => true, remove: vi.fn(), update: vi.fn() }; } } });
     reconciler.reconcile();
     await Promise.resolve();
     expect(initial.anchor).toHaveAttribute('data-pr-overview-mount-anchor');
@@ -812,12 +1003,12 @@ describe('page reconciler', () => {
   it('does not hide native UI until an async replacement mounts and restores state after mount failures or disposal races', async () => {
     const document = page(row());
     const native = document.querySelector<HTMLAnchorElement>('.comments-link')!;
-    let resolve!: (mount: { remove(): void; update(): void }) => void;
-    const deferred = new Promise<{ remove(): void; update(): void }>((done) => { resolve = done; });
+    let resolve!: (mount: MountedCard) => void;
+    const deferred = new Promise<MountedCard>((done) => { resolve = done; });
     const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount() { return deferred; } } });
     reconciler.reconcile();
     expect(native.hidden).toBe(false);
-    const remove = vi.fn(); resolve({ remove, update: vi.fn() });
+    const remove = vi.fn(); resolve({ isConnected: () => true, remove, update: vi.fn() });
     await Promise.resolve();
     expect(native.hidden).toBe(true);
     reconciler.cleanup();
@@ -826,26 +1017,30 @@ describe('page reconciler', () => {
 
     const failed = page(row());
     const failedNative = failed.querySelector<HTMLAnchorElement>('.comments-link')!;
-    createPageReconciler({ document: failed, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount() { throw new Error('mount failed'); } } }).reconcile();
+    const failedReconciler = createPageReconciler({ document: failed, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount() { throw new Error('mount failed'); } } });
+    failedReconciler.reconcile();
     await Promise.resolve();
     expect(failedNative.hidden).toBe(false);
+    failedReconciler.cleanup();
 
     const rejected = page(row());
     const rejectedNative = rejected.querySelector<HTMLAnchorElement>('.comments-link')!;
     let reject!: (reason: Error) => void;
-    const rejectMount = new Promise<{ remove(): void; update(): void }>((_resolve, fail) => { reject = fail; });
-    createPageReconciler({ document: rejected, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount() { return rejectMount; } } }).reconcile();
+    const rejectMount = new Promise<MountedCard>((_resolve, fail) => { reject = fail; });
+    const rejectedReconciler = createPageReconciler({ document: rejected, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount() { return rejectMount; } } });
+    rejectedReconciler.reconcile();
     reject(new Error('async mount failed'));
     await Promise.resolve(); await Promise.resolve();
     expect(rejectedNative.hidden).toBe(false);
+    rejectedReconciler.cleanup();
 
     const racing = page(row());
     const racingNative = racing.querySelector<HTMLAnchorElement>('.comments-link')!;
-    let resolveRace!: (mount: { remove(): void; update(): void }) => void;
-    const race = new Promise<{ remove(): void; update(): void }>((done) => { resolveRace = done; });
+    let resolveRace!: (mount: MountedCard) => void;
+    const race = new Promise<MountedCard>((done) => { resolveRace = done; });
     const raceRemove = vi.fn();
     const raceReconciler = createPageReconciler({ document: racing, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount() { return race; } } });
-    raceReconciler.reconcile(); raceReconciler.cleanup(); resolveRace({ remove: raceRemove, update: vi.fn() });
+    raceReconciler.reconcile(); raceReconciler.cleanup(); resolveRace({ isConnected: () => true, remove: raceRemove, update: vi.fn() });
     await Promise.resolve();
     expect(racingNative.hidden).toBe(false);
     expect(raceRemove).toHaveBeenCalledOnce();
@@ -863,7 +1058,7 @@ describe('page reconciler', () => {
           if (failureMode === 'synchronous throw') throw new Error('temporary mount failure');
           return Promise.reject(new Error('temporary mount failure'));
         }
-        return { remove: vi.fn(), update: vi.fn() };
+        return { isConnected: () => true, remove: vi.fn(), update: vi.fn() };
       });
       const reconciler = createPageReconciler({
         document,
@@ -907,7 +1102,7 @@ describe('page reconciler', () => {
     const document = page(row(43, ''));
     const client = { loadPullRequest: vi.fn(async () => remote) };
     const mounted: Element[] = [];
-    const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount(anchor) { mounted.push(anchor); return { remove: vi.fn(), update: vi.fn() }; } } });
+    const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount(anchor) { mounted.push(anchor); return { isConnected: () => true, remove: vi.fn(), update: vi.fn() }; } } });
 
     reconciler.reconcile();
     const extensionAnchor = document.querySelector('[data-pr-overview-mount-anchor]')!;
@@ -923,7 +1118,7 @@ describe('page reconciler', () => {
   it('adopts a new ready counter without remounting when GitHub retains the former node', async () => {
     const document = page(row());
     const oldCounter = document.querySelector<HTMLAnchorElement>('.comments-link')!;
-    const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));
+    const mount = vi.fn(() => ({ isConnected: () => true, remove: vi.fn(), update: vi.fn() }));
     const reconciler = createPageReconciler({
       document,
       client: { loadPullRequest: vi.fn(async () => remote) },
@@ -957,7 +1152,7 @@ describe('page reconciler', () => {
     const document = page(row());
     const native = document.querySelector<HTMLAnchorElement>('.comments-link')!;
     const updates: unknown[] = [];
-    const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount(_anchor, props) { updates.push(props.summary.totalComments); return { remove: vi.fn(), update(next) { updates.push(next.summary.totalComments); } }; } } });
+    const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount(_anchor, props) { updates.push(props.summary.totalComments); return { isConnected: () => true, remove: vi.fn(), update(next) { updates.push(next.summary.totalComments); } }; } } });
     reconciler.reconcile();
     await Promise.resolve();
     native.setAttribute('aria-label', 'many comments');
@@ -974,7 +1169,7 @@ describe('page reconciler', () => {
     const document = page(row());
     const native = document.querySelector<HTMLAnchorElement>('.comments-link')!;
     const latest: any[] = [];
-    const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount(_anchor, props) { latest.push(props); return { remove: vi.fn(), update(next) { latest.push(next); } }; } } });
+    const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount(_anchor, props) { latest.push(props); return { isConnected: () => true, remove: vi.fn(), update(next) { latest.push(next); } }; } } });
     reconciler.reconcile();
     await vi.waitFor(() => expect(latest.some((item) => item.summary.reviewThreads.status === 'ready')).toBe(true));
     native.setAttribute('aria-label', '24 comments');
@@ -987,7 +1182,7 @@ describe('page reconciler', () => {
   it('automatically mounts inserted rows, disposes removed rows, and never remounts from a queued mutation after cleanup', async () => {
     const document = page(row());
     const removed = vi.fn();
-    const mount = vi.fn(() => ({ remove: removed, update: vi.fn() }));
+    const mount = vi.fn(() => ({ isConnected: () => true, remove: removed, update: vi.fn() }));
     const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount } });
     reconciler.reconcile();
     const added = document.createElement('div'); added.innerHTML = row(44); const newRow = added.firstElementChild!; document.body.append(newRow);
@@ -1005,7 +1200,7 @@ describe('page reconciler', () => {
     const calls: AbortSignal[] = [];
     const client = { loadPullRequest: vi.fn((_identity, signal?: AbortSignal) => { calls.push(signal!); return new Promise<PullRequestRemoteSummary>(() => {}); }) };
     const updates: any[] = [];
-    const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount(_anchor, props) { updates.push(props); return { remove: vi.fn(), update(next) { updates.push(next); } }; } } });
+    const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount(_anchor, props) { updates.push(props); return { isConnected: () => true, remove: vi.fn(), update(next) { updates.push(next); } }; } } });
     reconciler.reconcile();
     await Promise.resolve();
     const title = document.querySelector<HTMLAnchorElement>('.Link--primary')!;
@@ -1044,7 +1239,7 @@ describe('page reconciler', () => {
       uiFactory: {
         mount(_anchor, props) {
           updates.push(props);
-          return { remove: removed, update(next) { updates.push(next); } };
+          return { isConnected: () => true, remove: removed, update(next) { updates.push(next); } };
         },
       },
     });
@@ -1091,7 +1286,7 @@ describe('page reconciler', () => {
       uiFactory: {
         mount(_anchor, props) {
           updates.push(props);
-          return { remove: vi.fn(), update(next) { updates.push(next); } };
+          return { isConnected: () => true, remove: vi.fn(), update(next) { updates.push(next); } };
         },
       },
     });
@@ -1142,7 +1337,7 @@ describe('page reconciler', () => {
       uiFactory: {
         mount(_anchor, props) {
           updates.push(props);
-          return { remove: removed, update(next) { updates.push(next); } };
+          return { isConnected: () => true, remove: removed, update(next) { updates.push(next); } };
         },
       },
     });
@@ -1163,7 +1358,7 @@ describe('page reconciler', () => {
     const document = page(row());
     const native = document.querySelector<HTMLAnchorElement>('.comments-link')!;
     const totals: any[] = [];
-    const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount(_anchor, props) { totals.push(props.summary.totalComments); return { remove: vi.fn(), update(next) { totals.push(next.summary.totalComments); } }; } } });
+    const reconciler = createPageReconciler({ document, client: { loadPullRequest: vi.fn(async () => remote) }, IntersectionObserver: undefined, uiFactory: { mount(_anchor, props) { totals.push(props.summary.totalComments); return { isConnected: () => true, remove: vi.fn(), update(next) { totals.push(next.summary.totalComments); } }; } } });
     reconciler.reconcile(); await Promise.resolve();
     native.setAttribute('aria-label', 'many comments');
     await vi.waitFor(() => expect(totals).toContainEqual({ message: 'GitHub comment counter is malformed.', status: 'error' }));
@@ -1177,7 +1372,7 @@ describe('page reconciler', () => {
     const pending = new Promise<PullRequestRemoteSummary>((done) => { resolve = done; });
     const client = { loadPullRequest: vi.fn(() => pending) };
     const updates: unknown[] = [];
-    const mount = vi.fn((_anchor: Element, props: any) => { updates.push(props); return { remove: vi.fn(), update(next: any) { updates.push(next); } }; });
+    const mount = vi.fn((_anchor: Element, props: any) => { updates.push(props); return { isConnected: () => true, remove: vi.fn(), update(next: any) { updates.push(next); } }; });
     const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount } });
     reconciler.reconcile(); reconciler.reconcile();
     expect(mount).toHaveBeenCalledTimes(1);

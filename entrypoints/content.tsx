@@ -33,6 +33,11 @@ export default defineContentScript({
           });
           ui.mount();
           return {
+            isConnected() {
+              return ui.shadowHost.isConnected &&
+                ui.shadowHost.closest('[id^="issue_"].js-issue-row') ===
+                  anchor.closest('[id^="issue_"].js-issue-row');
+            },
             remove() { ui.remove(); },
             update(next) { ui.mounted?.render(<PullRequestCard {...next} />); },
           };
