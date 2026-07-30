@@ -15,89 +15,169 @@ const ready: PullRequestSummary = {
   totalComments: { data: { count: 23, href: '/octo/demo/pull/42#issuecomment-23' }, status: 'ready' },
 };
 
+function visibleCardText(card = screen.getByTestId('pr-card')): string {
+  const clone = card.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll('.sr-only').forEach((node) => node.remove());
+  return [...clone.children]
+    .map((node) => node.textContent?.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
 describe('PullRequestCard', () => {
-  it('keeps the native total independent and most prominent from review-thread metrics', () => {
+  it('renders the approved single-line token order with distinct links and explicit separators', () => {
     render(<PullRequestCard summary={ready} conversationHref="/octo/demo/pull/42" filesHref="/octo/demo/pull/42/files" />);
 
-    expect(screen.getByRole('link', { name: '23 total comments' })).toHaveAttribute('href', '/octo/demo/pull/42#issuecomment-23');
-    expect(screen.getByRole('link', { name: /8 review threads/ })).toHaveTextContent('8 review threads · 2 unresolved · 6 resolved+outdated');
-    expect(screen.getByText('23 total comments').className).toContain('total');
-    expect(screen.getByText(/8 review threads/).className).not.toContain('total');
+    expect(visibleCardText()).toBe('23 comments · 2 unresolved · −81/+340 12 files · Codex 3 · Claude 0');
+
+    const comments = screen.getByRole('link', { name: '23 comments' });
+    const unresolved = screen.getByRole('link', { name: '2 unresolved review threads' });
+    const diff = screen.getByRole('link', { name: '81 deletions, 340 additions, 12 files changed' });
+    expect(comments).toHaveAttribute('href', '/octo/demo/pull/42#issuecomment-23');
+    expect(unresolved).toHaveAttribute('href', '/octo/demo/pull/42');
+    expect(diff).toHaveAttribute('href', '/octo/demo/pull/42/files');
+    expect(unresolved).toHaveClass('unresolved');
+    expect(comments).not.toHaveClass('unresolved');
+    expect(diff).not.toHaveClass('unresolved');
+    expect(screen.getByText('Codex 3')).not.toHaveClass('unresolved');
+
+    const separators = screen.getAllByText('·', { selector: '.separator' });
+    expect(separators).toHaveLength(4);
+    for (const separator of separators) expect(separator).toHaveAttribute('aria-hidden', 'true');
   });
 
-  it('renders exact zero totals and exact zero threads without fabrication', () => {
-    render(<PullRequestCard summary={{ ...ready, authoredByViewer: false, agents: { data: [], status: 'ready' }, reviewThreads: { data: { total: 0, unresolved: 0, resolvedOrOutdated: 0 }, status: 'ready' }, totalComments: { data: { count: 0, href: '/o/r/pull/1' }, status: 'ready' } }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
+  it('renders exact zero totals and requested-only agents without fabrication', () => {
+    render(<PullRequestCard summary={{
+      ...ready,
+      authoredByViewer: false,
+      agents: { data: [
+        { agentId: 'gemini', responseCount: 0, requestSources: ['formal-review-request'], state: 'requested' },
+      ], status: 'ready' },
+      reviewThreads: { data: { total: 0, unresolved: 0, resolvedOrOutdated: 0 }, status: 'ready' },
+      totalComments: { data: { count: 0, href: '/o/r/pull/1' }, status: 'ready' },
+    }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
-    expect(screen.getByText('0 total comments')).toBeVisible();
-    expect(screen.getByText('0 review threads · 0 unresolved · 0 resolved+outdated')).toBeVisible();
-    expect(screen.getByText('No AI agents')).toBeVisible();
+    expect(visibleCardText()).toBe('0 comments · 0 unresolved · −81/+340 12 files · Gemini 0');
+    expect(screen.getByRole('link', { name: '0 unresolved review threads' })).not.toHaveClass('unresolved');
   });
 
-  it('renders independently loading, partial, and error section states', () => {
-    render(<PullRequestCard summary={{ ...ready,
+  it('renders a ready empty agent section as definitive', () => {
+    render(<PullRequestCard
+      summary={{ ...ready, agents: { data: [], status: 'ready' } }}
+      conversationHref="/o/r/pull/1"
+      filesHref="/o/r/pull/1/files"
+    />);
+
+    expect(visibleCardText()).toBe('23 comments · 2 unresolved · −81/+340 12 files · No AI agents');
+  });
+
+  it('keeps loading, partial, and error states in their fixed line positions', () => {
+    render(<PullRequestCard summary={{
+      ...ready,
       totalComments: { message: 'GitHub counter is malformed.', status: 'error' },
       reviewThreads: { data: { total: 8, unresolved: 2, resolvedOrOutdated: 6 }, reason: 'More content is loading.', status: 'partial' },
       diff: { data: { additions: 340, deletions: 81, filesChanged: 12 }, reason: 'Collapsed files.', status: 'partial' },
       agents: { status: 'loading' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
-    expect(screen.getByText('— total comments')).toHaveAttribute('title', 'GitHub counter is malformed.');
-    expect(screen.getByText('8+ review threads · 2+ unresolved · 6+ resolved+outdated')).toHaveAttribute('title', 'More content is loading.');
-    expect(screen.getByText('12+ files · +340+ −81+')).toHaveAttribute('title', 'Collapsed files.');
+    expect(visibleCardText()).toBe('— comments · 2+ unresolved · −81+/+340+ 12+ files · Loading agents…');
+    expect(screen.getByText('— comments')).toHaveAttribute('title', 'GitHub counter is malformed.');
+    expect(screen.getByRole('link', { name: 'At least 2 unresolved review threads' })).toHaveAttribute('title', 'More content is loading.');
+    expect(screen.getByRole('link', { name: 'At least 81 deletions, 340 additions, 12 files changed' })).toHaveAttribute('title', 'Collapsed files.');
     expect(screen.getByLabelText('Loading AI agents')).toBeVisible();
   });
 
   it('uses singular grammar and exposes every error reason to assistive technology', () => {
-    render(<PullRequestCard summary={{ ...ready,
+    const view = render(<PullRequestCard summary={{
+      ...ready,
       totalComments: { data: { count: 1, href: '/o/r/pull/1#comments' }, status: 'ready' },
       reviewThreads: { data: { total: 1, unresolved: 1, resolvedOrOutdated: 0 }, status: 'ready' },
       diff: { data: { additions: 1, deletions: 1, filesChanged: 1 }, status: 'ready' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
-    expect(screen.getByText('1 total comment')).toBeVisible();
-    expect(screen.getByText('1 review thread · 1 unresolved · 0 resolved+outdated')).toBeVisible();
-    expect(screen.getByText('1 file · +1 −1')).toBeVisible();
 
-    render(<PullRequestCard summary={{ ...ready,
-      totalComments: { message: 'counter failed', status: 'error' }, reviewThreads: { message: 'threads failed', status: 'error' },
-      diff: { message: 'files failed', status: 'error' }, agents: { message: 'agents failed', status: 'error' },
+    expect(visibleCardText()).toBe('1 comment · 1 unresolved · −1/+1 1 file · Codex 3 · Claude 0');
+    expect(screen.getByRole('link', { name: '1 unresolved review thread' })).toBeVisible();
+    expect(screen.getByRole('link', { name: '1 deletion, 1 addition, 1 file changed' })).toBeVisible();
+
+    view.rerender(<PullRequestCard summary={{
+      ...ready,
+      totalComments: { message: 'counter failed', status: 'error' },
+      reviewThreads: { message: 'threads failed', status: 'error' },
+      diff: { message: 'files failed', status: 'error' },
+      agents: { message: 'agents failed', status: 'error' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
+
+    expect(visibleCardText()).toBe('— comments · — unresolved · — files · AI agents unavailable');
+    expect(screen.getByText('— unresolved')).not.toHaveClass('unresolved');
     for (const reason of ['counter failed', 'threads failed', 'files failed', 'agents failed']) {
-      expect(screen.getAllByText(reason, { selector: '.sr-only' }).length).toBeGreaterThan(0);
+      expect(screen.getByText(reason, { selector: '.sr-only' })).toBeInTheDocument();
     }
   });
 
-  it('marks partial values as lower bounds and never treats partial empty agents as definitive', () => {
-    render(<PullRequestCard summary={{ ...ready,
+  it('marks partial metrics as lower bounds and never treats partial empty agents as definitive', () => {
+    render(<PullRequestCard summary={{
+      ...ready,
       totalComments: { data: { count: 23, href: '/o/r/pull/1#comments' }, reason: 'counter may still change', status: 'partial' },
       reviewThreads: { data: { total: 8, unresolved: 2, resolvedOrOutdated: 6 }, reason: 'timeline is incomplete', status: 'partial' },
       agents: { data: [], reason: 'timeline is incomplete', status: 'partial' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
-    expect(screen.getByText('23+ total comments')).toHaveAttribute('aria-describedby');
-    expect(screen.getByText(/8\+ review threads/)).toHaveAttribute('aria-describedby');
+
+    expect(visibleCardText()).toBe('23+ comments · 2+ unresolved · −81/+340 12 files · No AI agents detected yet');
+    expect(screen.getByText('23+ comments')).toHaveAttribute('aria-describedby');
+    expect(screen.getByRole('link', { name: 'At least 2 unresolved review threads' })).toHaveAttribute('aria-describedby');
     expect(screen.getByText('No AI agents detected yet')).toHaveAttribute('aria-describedby');
   });
 
-  it('visibly marks responded-agent counts as lower bounds when agent data is partial', () => {
-    render(<PullRequestCard summary={{ ...ready,
+  it('keeps partial agent counts visually terse while preserving the reason accessibly', () => {
+    render(<PullRequestCard summary={{
+      ...ready,
       agents: { data: [
         { agentId: 'codex', responseCount: 3, requestSources: ['formal-review-request'], state: 'responded' },
       ], reason: 'Some timeline fragments were unavailable.', status: 'partial' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
-    const chip = screen.getByText('Codex Responded · 3+');
-    expect(chip).toHaveAttribute('aria-describedby');
-    expect(chip).toHaveAttribute('title', expect.stringContaining('Some timeline fragments were unavailable.'));
+    const agent = screen.getByText('Codex 3');
+    expect(agent).toHaveAttribute('aria-describedby');
+    expect(agent).toHaveAttribute(
+      'title',
+      'Responded after a formal review request. At least 3 responses detected. Partial agent data: Some timeline fragments were unavailable.',
+    );
+    expect(agent).not.toHaveTextContent('+');
+    expect(screen.getByText(
+      /At least 3 responses detected\. Partial agent data: Some timeline fragments were unavailable\./,
+      { selector: '.sr-only' },
+    )).toBeInTheDocument();
   });
 
   it.each([
-    ['total comments', { ...ready, totalComments: { status: 'loading' } }],
-    ['review threads', { ...ready, reviewThreads: { status: 'loading' } }],
-    ['changed files', { ...ready, diff: { status: 'loading' } }],
-    ['AI agents', { ...ready, agents: { status: 'loading' } }],
-  ] as const satisfies readonly [string, PullRequestSummary][])('sets aria-busy while only %s is loading', (_, loading) => {
+    [
+      'total comments',
+      { ...ready, totalComments: { status: 'loading' } },
+      'Loading comments… · 2 unresolved · −81/+340 12 files · Codex 3 · Claude 0',
+    ],
+    [
+      'review threads',
+      { ...ready, reviewThreads: { status: 'loading' } },
+      '23 comments · Loading unresolved… · −81/+340 12 files · Codex 3 · Claude 0',
+    ],
+    [
+      'changed files',
+      { ...ready, diff: { status: 'loading' } },
+      '23 comments · 2 unresolved · Loading files… · Codex 3 · Claude 0',
+    ],
+    [
+      'AI agents',
+      { ...ready, agents: { status: 'loading' } },
+      '23 comments · 2 unresolved · −81/+340 12 files · Loading agents…',
+    ],
+  ] as const satisfies readonly [string, PullRequestSummary, string][])('keeps the exact line while only %s is loading', (sectionName, loading, line) => {
     render(<PullRequestCard summary={loading} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
     expect(screen.getByTestId('pr-card')).toHaveAttribute('aria-busy', 'true');
+    expect(visibleCardText()).toBe(line);
+    if (sectionName === 'review threads') {
+      expect(screen.getByLabelText('Loading unresolved review threads')).not.toHaveClass('unresolved');
+    }
   });
 
   it('updates aria-busy and retains one stable status node as sections load', () => {
@@ -127,7 +207,7 @@ describe('PullRequestCard', () => {
 
     expect(screen.getByTestId('pr-card')).toHaveAttribute('aria-busy', 'false');
     expectStatus('Pull request overview updated.');
-    expect(screen.getByText('23 total comments')).toBeVisible();
+    expect(screen.getByText('23 comments')).toBeVisible();
     expect(consoleError).not.toHaveBeenCalledWith(expect.stringContaining('Rendered more hooks'));
     consoleError.mockRestore();
   });
@@ -135,10 +215,10 @@ describe('PullRequestCard', () => {
   it('uses registry labels with response precedence, provenance, and tab hrefs', () => {
     render(<PullRequestCard summary={ready} conversationHref="/octo/demo/pull/42" filesHref="/octo/demo/pull/42/files" />);
 
-    expect(screen.getByText('Codex Responded · 3')).toHaveAttribute('title', 'Responded after a formal review request.');
-    expect(screen.getByText('Claude Requested')).toHaveAttribute('title', 'Requested — detected from 👀 reaction.');
-    expect(screen.getByRole('link', { name: /8 review threads/ })).toHaveAttribute('href', '/octo/demo/pull/42');
-    expect(screen.getByRole('link', { name: /12 files/ })).toHaveAttribute('href', '/octo/demo/pull/42/files');
+    expect(screen.getByText('Codex 3')).toHaveAttribute('title', 'Responded after a formal review request.');
+    expect(screen.getByText('Claude 0')).toHaveAttribute('title', 'Requested — detected from 👀 reaction.');
+    expect(screen.getByRole('link', { name: '2 unresolved review threads' })).toHaveAttribute('href', '/octo/demo/pull/42');
+    expect(screen.getByRole('link', { name: '81 deletions, 340 additions, 12 files changed' })).toHaveAttribute('href', '/octo/demo/pull/42/files');
   });
 
   it('does not invent request provenance for responses and retains every request source accessibly', () => {
@@ -146,20 +226,25 @@ describe('PullRequestCard', () => {
       { agentId: 'codex', responseCount: 3, requestSources: [], state: 'responded' },
       { agentId: 'claude', responseCount: 0, requestSources: ['formal-review-request', 'started-reviewing', 'eyes-reaction'], state: 'requested' },
     ], status: 'ready' } }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
-    expect(screen.getByText('Codex Responded · 3')).toHaveAttribute('title', 'Responded 3 times.');
-    const requested = screen.getByText('Claude Requested');
+
+    expect(screen.getByText('Codex 3')).toHaveAttribute('title', 'Responded 3 times.');
+    const requested = screen.getByText('Claude 0');
     expect(requested.getAttribute('title')).toContain('formal review request');
     expect(requested.getAttribute('title')).toContain('started reviewing');
     expect(requested.getAttribute('title')).toContain('👀 reaction');
     expect(requested).toHaveAttribute('aria-describedby');
   });
 
-  it('announces authored-by-viewer accessibly and ships isolated theme, focus, and reduced-motion styling', () => {
+  it('announces authorship and ships isolated no-wrap, overflow, focus, and motion styling', () => {
     render(<PullRequestCard summary={ready} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
     expect(screen.getByText('Authored by you', { selector: '.sr-only' })).toBeInTheDocument();
     expect(screen.getByTestId('pr-card')).toHaveClass('authored');
     expect(screen.getByRole('group', { name: 'Pull request review overview' })).toBeInTheDocument();
+    expect(CARD_STYLES).toContain('flex-flow: row nowrap');
+    expect(CARD_STYLES).toContain('white-space: nowrap');
+    expect(CARD_STYLES).toContain('overflow-x: auto');
+    expect(CARD_STYLES).toContain('margin-inline-start: auto');
     expect(CARD_STYLES).toContain('--fgColor-accent');
     expect(CARD_STYLES).toContain(':focus-visible');
     expect(CARD_STYLES).toContain('prefers-reduced-motion: reduce');

@@ -75,6 +75,19 @@ function currentPullRequestRow(): void {
   window.history.replaceState({}, '', '/octo/demo/pulls');
 }
 
+function renderedOverviewLine(): string | undefined {
+  const card = document.querySelector('github-pr-overview')
+    ?.shadowRoot
+    ?.querySelector<HTMLElement>('.pr-overview-card');
+  if (!card) return undefined;
+  const clone = card.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll('.sr-only').forEach((node) => node.remove());
+  return [...clone.children]
+    .map((node) => node.textContent?.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
 afterEach(() => {
   wxtBoundary.options = undefined;
   vi.unstubAllGlobals();
@@ -116,9 +129,7 @@ it('renders the real content entrypoint with fixture-backed data and restores th
   expect(wxtBoundary.options).not.toHaveProperty('cssInjectionMode');
 
   await waitFor(() => {
-    const shadow = document.querySelector('github-pr-overview')?.shadowRoot;
-    expect(shadow).toHaveTextContent('18 files');
-    expect(shadow).toHaveTextContent('Copilot Responded');
+    expect(renderedOverviewLine()).toBe('2 comments · 0 unresolved · −353/+524 18 files · Copilot 1');
   });
   expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual(expect.arrayContaining([...fixtures.keys()]));
   expect(fetcher).toHaveBeenCalledTimes(3);

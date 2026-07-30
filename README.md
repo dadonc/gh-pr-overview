@@ -6,14 +6,19 @@ It runs on URLs matching `https://github.com/*/*/pulls*`.
 
 ## What it shows
 
-- GitHub's native total comment count, unchanged, as the primary metric.
-- Unique review-thread totals split into active unresolved and
-  resolved-or-outdated conversations.
-- Files changed, additions, and deletions.
-- Participation from an explicit allowlist of AI coding and review agents,
-  including whether each agent was requested or responded and its response
-  count.
+- GitHub's native total comment count as `X comments`.
+- Active unresolved review threads as `X unresolved`. The extension still
+  computes the complete thread totals and resolved-or-outdated breakdown
+  internally.
+- Deletions, additions, and files changed as `−X/+X X files`.
+- Participation from an explicit allowlist of AI coding and review agents as
+  `Name responseCount`, including a zero count when an agent was requested but
+  has not responded.
 - A subtle marker for pull requests authored by the signed-in viewer.
+
+The overview stays on one line, with sections separated by `·`. When the
+available row is narrower than the summary, the card scrolls horizontally
+inside the pull-request row.
 
 Total comments and review threads are independent metrics. Issue comments,
 review summaries, and other non-resolvable discussion still remain represented
@@ -92,6 +97,15 @@ output.
 
 After rebuilding, use the extension's reload button on `chrome://extensions`
 and refresh the GitHub tab.
+
+### `— files` or `Failed to fetch`
+
+If the files segment remains `— files` and its tooltip reports
+`Failed to fetch`, test the extension in a clean Chrome profile. Another
+extension, privacy filter, or managed profile policy may be blocking GitHub's
+same-origin pull-request files-page request. Allow GitHub files-page requests
+in the blocker or policy, then reload both the unpacked extension and the
+GitHub tab.
 
 This project is source-controlled for local testing and review. It has not been
 published to the Chrome Web Store.

@@ -24,6 +24,15 @@ function readNativeCounterSnapshot(counter: HTMLAnchorElement): NativeCounterSna
   };
 }
 
+function readVisibleCardLine(card: HTMLElement): string {
+  const clone = card.cloneNode(true) as HTMLElement;
+  clone.querySelectorAll('.sr-only').forEach((node) => node.remove());
+  return [...clone.children]
+    .map((node) => node.textContent?.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
 test('boots the unpacked extension with a rendered, isolated shadow card', async ({ extension }) => {
   await extension.recordNativeCounterAtHostConnection();
   await extension.page.goto(extension.urls.prList);
@@ -31,15 +40,66 @@ test('boots the unpacked extension with a rendered, isolated shadow card', async
 
   const row = extension.page.locator('#issue_42');
   const host = row.locator('github-pr-overview');
+  const card = host.locator('.pr-overview-card');
   const nativeCounter = row.locator('a[aria-label="2 comments"]');
 
   await expect(extension.page.locator('[id^="issue_"].js-issue-row')).toHaveCount(1);
   await expect(host).toHaveCount(1);
-  await expect(host.locator('.pr-overview-card')).toContainText('2 total comments');
-  await expect(host.locator('.pr-overview-card')).toContainText('1 review thread · 0 unresolved · 1 resolved+outdated');
-  await expect(host.locator('.pr-overview-card')).toContainText('18 files · +524 −353');
-  await expect(host.locator('.pr-overview-card')).toContainText('Copilot Responded');
+  await expect.poll(() => card.evaluate(readVisibleCardLine))
+    .toBe('2 comments · 0 unresolved · −353/+524 18 files · Copilot 1');
   await expect(nativeCounter).toBeHidden();
+
+  const typography = await card.evaluate((element) => {
+    const weight = (selector: string) =>
+      getComputedStyle(element.querySelector<HTMLElement>(selector)!).fontWeight;
+    return {
+      agent: weight('.agent'),
+      comments: weight('.comments'),
+      diff: weight('.diff'),
+      separator: weight('.separator'),
+      unresolved: weight('[aria-label="0 unresolved review threads"]'),
+    };
+  });
+  expect(typography).toEqual({
+    agent: '400',
+    comments: '400',
+    diff: '400',
+    separator: '400',
+    unresolved: '400',
+  });
+
+  const verticalSpread = await card.evaluate((element) => {
+    const tops = [...element.querySelectorAll<HTMLElement>(
+      ':scope > .comments, :scope > .separator, :scope > .unresolved, :scope > .diff, :scope > .agent',
+    )].map((node) => node.getBoundingClientRect().top);
+    return Math.max(...tops) - Math.min(...tops);
+  });
+  expect(verticalSpread).toBeLessThanOrEqual(1);
+
+  const bounds = await row.evaluate((element) => {
+    const renderedCard = element.querySelector('github-pr-overview')
+      ?.shadowRoot
+      ?.querySelector<HTMLElement>('.pr-overview-card');
+    if (!renderedCard?.parentElement) throw new Error('Rendered card is missing.');
+    const rowBounds = element.getBoundingClientRect();
+    const cardBounds = renderedCard.getBoundingClientRect();
+    const containerBounds = renderedCard.parentElement.getBoundingClientRect();
+    return {
+      cardLeft: cardBounds.left,
+      cardRight: cardBounds.right,
+      cardWidth: cardBounds.width,
+      containerRight: containerBounds.right,
+      containerWidth: containerBounds.width,
+      rowLeft: rowBounds.left,
+      rowRight: rowBounds.right,
+    };
+  });
+  expect(bounds.cardLeft).toBeGreaterThanOrEqual(bounds.rowLeft);
+  expect(bounds.cardRight).toBeLessThanOrEqual(bounds.rowRight);
+  expect(bounds.cardWidth).toBeLessThan(bounds.containerWidth);
+  expect(bounds.cardRight).toBeCloseTo(bounds.containerRight, 1);
+  await expect(host).toHaveCSS('display', 'block');
+  await expect(host).toHaveCSS('max-width', '100%');
 
   await expect.poll(() => extension.nativeCounterSnapshotsAtHostConnection()).toEqual([{
     ariaHidden: null,
@@ -66,6 +126,52 @@ test('boots the unpacked extension with a rendered, isolated shadow card', async
   await extension.expectNoFailures();
 });
 
+test('keeps the strict line inside the row and scrolls it internally at narrow widths', async ({ extension }) => {
+  await extension.page.setViewportSize({ width: 240, height: 720 });
+  await extension.page.goto(extension.urls.prList);
+
+  const row = extension.page.locator('#issue_42');
+  const card = row.locator('github-pr-overview').locator('.pr-overview-card');
+  await expect.poll(() => card.evaluate(readVisibleCardLine))
+    .toBe('2 comments · 0 unresolved · −353/+524 18 files · Copilot 1');
+
+  const layout = await card.evaluate((element) => {
+    const visibleChildren = [...element.querySelectorAll<HTMLElement>(
+      ':scope > .comments, :scope > .separator, :scope > .unresolved, :scope > .diff, :scope > .agent',
+    )];
+    const tops = visibleChildren.map((node) => node.getBoundingClientRect().top);
+    const shadowRoot = element.getRootNode();
+    const row = shadowRoot instanceof ShadowRoot
+      ? shadowRoot.host.closest<HTMLElement>('#issue_42')
+      : null;
+    if (!row) throw new Error('Pull request row is missing.');
+    const rowBounds = row.getBoundingClientRect();
+    const cardBounds = element.getBoundingClientRect();
+    element.scrollLeft = element.scrollWidth;
+    return {
+      cardLeft: cardBounds.left,
+      cardRight: cardBounds.right,
+      clientWidth: element.clientWidth,
+      documentClientWidth: document.documentElement.clientWidth,
+      documentScrollWidth: document.documentElement.scrollWidth,
+      rowLeft: rowBounds.left,
+      rowRight: rowBounds.right,
+      scrollLeft: element.scrollLeft,
+      scrollWidth: element.scrollWidth,
+      verticalSpread: Math.max(...tops) - Math.min(...tops),
+    };
+  });
+
+  expect(layout.scrollWidth).toBeGreaterThan(layout.clientWidth);
+  expect(layout.scrollLeft).toBeGreaterThan(0);
+  expect(layout.verticalSpread).toBeLessThanOrEqual(1);
+  expect(layout.cardLeft).toBeGreaterThanOrEqual(layout.rowLeft);
+  expect(layout.cardRight).toBeLessThanOrEqual(layout.rowRight);
+  expect(layout.documentScrollWidth).toBeLessThanOrEqual(layout.documentClientWidth);
+
+  await extension.expectNoFailures();
+});
+
 test('reconciles inserted rows and restores native UI across pushState remounts', async ({ extension }) => {
   await extension.recordNativeCounterAtHostConnection();
   await extension.page.goto(extension.urls.prList);
@@ -74,7 +180,8 @@ test('reconciles inserted rows and restores native UI across pushState remounts'
   const host = row.locator('github-pr-overview');
   const nativeCounter = row.locator('a[aria-label="2 comments"]');
   await expect(host).toHaveCount(1);
-  await expect(host.locator('.pr-overview-card')).toContainText('18 files · +524 −353');
+  await expect.poll(() => host.locator('.pr-overview-card').evaluate(readVisibleCardLine))
+    .toBe('2 comments · 0 unresolved · −353/+524 18 files · Copilot 1');
   await expect(nativeCounter).toBeHidden();
   const pristineNativeCounter = await extension.nativeCounterSnapshotsAtHostConnection().then((snapshots) => snapshots[0]!);
 
@@ -87,7 +194,8 @@ test('reconciles inserted rows and restores native UI across pushState remounts'
   }, extension.currentRowHtml);
   const inserted = extension.page.locator('#issue_420');
   await expect(inserted.locator('github-pr-overview')).toHaveCount(1);
-  await expect(inserted.locator('.pr-overview-card')).toContainText('18 files · +524 −353');
+  await expect.poll(() => inserted.locator('.pr-overview-card').evaluate(readVisibleCardLine))
+    .toBe('2 comments · 0 unresolved · −353/+524 18 files · Copilot 1');
   await expect(extension.page.locator('github-pr-overview')).toHaveCount(2);
 
   await inserted.evaluate((element) => element.remove());
@@ -109,9 +217,8 @@ test('reconciles inserted rows and restores native UI across pushState remounts'
   const remountedRow = extension.page.locator('#issue_42');
   const remountedHost = remountedRow.locator('github-pr-overview');
   await expect(remountedHost).toHaveCount(1);
-  await expect(remountedHost.locator('.pr-overview-card')).toContainText('7 total comments');
-  await expect(remountedHost.locator('.pr-overview-card')).not.toContainText('2 total comments');
-  await expect(remountedHost.locator('.pr-overview-card')).toContainText('18 files · +524 −353');
+  await expect.poll(() => remountedHost.locator('.pr-overview-card').evaluate(readVisibleCardLine))
+    .toBe('7 comments · 0 unresolved · −353/+524 18 files · Copilot 1');
   await expect(remountedHost).toHaveCount(1);
   await expect(extension.page.locator('github-pr-overview')).toHaveCount(1);
 
