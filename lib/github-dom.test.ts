@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import currentFilesHtml from '../test/fixtures/github/current/files.html?raw';
+import currentFilesNoAggregateHtml from '../test/fixtures/github/current/files-no-aggregate.html?raw';
 import diffAggregateHtml from '../test/fixtures/github/diff-aggregate.html?raw';
 import diffRenderedPartialHtml from '../test/fixtures/github/diff-rendered-partial.html?raw';
 import prListHtml from '../test/fixtures/github/pr-list.html?raw';
@@ -587,6 +589,35 @@ describe('extractTimeline', () => {
 });
 
 describe('extractDiffSummary', () => {
+  it('uses the current exact aggregate even when rendered files are progressive', () => {
+    const result = extractDiffSummary(parse(currentFilesHtml));
+
+    expect(result).toEqual({
+      completeness: { isComplete: true, reasons: [] },
+      data: { additions: 524, deletions: 353, filesChanged: 18 },
+    });
+  });
+
+  it('marks the rendered fallback partial for a current progressive loader', () => {
+    const result = extractDiffSummary(parse(currentFilesNoAggregateHtml));
+
+    expect(result.data).toEqual({
+      additions: 1,
+      deletions: 1,
+      filesChanged: 2,
+    });
+    expect(result.completeness.isComplete).toBe(false);
+  });
+
+  it('does not treat an unrelated include-fragment as diff incompleteness', () => {
+    const document = parse(`
+      <div class="file js-file"><a title="only.ts"></a></div>
+      <include-fragment src="/octo/demo/unrelated"></include-fragment>
+    `);
+
+    expect(extractDiffSummary(document).completeness.isComplete).toBe(true);
+  });
+
   it('prefers exact semantic diffstat totals', () => {
     expect(extractDiffSummary(parse(diffAggregateHtml))).toEqual({
       completeness: { isComplete: true, reasons: [] },
