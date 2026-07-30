@@ -104,6 +104,36 @@ describe('validateBundle', () => {
     }))).toEqual(['Content script size does not match payload: recorded 200000, actual 200001']);
   });
 
+  it('rejects non-genuine typed-array lookalikes without throwing', () => {
+    const taggedUint16Array = new Uint16Array(1);
+    Object.defineProperty(taggedUint16Array, Symbol.toStringTag, { value: 'Uint8Array' });
+    const invalidPayloads = [
+      new Proxy(Buffer.alloc(1), {}),
+      new Proxy(new Uint8Array(1), {}),
+      Object.create(Uint8Array.prototype),
+      new DataView(new ArrayBuffer(1)),
+      new Uint16Array(1),
+      taggedUint16Array,
+    ];
+
+    for (const contentScript of invalidPayloads) {
+      expect(() => validateBundle(validBundle({ contentScript }))).not.toThrow();
+      expect(validateBundle(validBundle({ contentScript })))
+        .toEqual(['Content script must be a string, Buffer, or Uint8Array']);
+    }
+  });
+
+  it('measures content-script strings in UTF-8 bytes', () => {
+    expect(validateBundle(validBundle({
+      contentScript: 'é',
+      sizes: [2, ...ALLOWED_FILES.slice(1).map(() => 1)],
+    }))).toEqual([]);
+    expect(validateBundle(validBundle({
+      contentScript: 'é',
+      sizes: [1, ...ALLOWED_FILES.slice(1).map(() => 1)],
+    }))).toEqual(['Content script size does not match payload: recorded 1, actual 2']);
+  });
+
   it('rejects a Chrome package larger than 270,000 bytes', () => {
     expect(validateBundle(validBundle({
       sizes: [1, 270_000, 0, 0, 0, 0, 0],

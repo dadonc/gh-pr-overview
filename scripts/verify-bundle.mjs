@@ -1,6 +1,7 @@
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import { join, posix, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { isUint8Array } from 'node:util/types';
 
 const ALLOWED_FILES = [
   'content-scripts/content.js',
@@ -26,11 +27,21 @@ function normalizeFilePath(file) {
 }
 
 function isContentScriptPayload(value) {
-  return typeof value === 'string' || Buffer.isBuffer(value) || value instanceof Uint8Array;
+  if (typeof value === 'string') return true;
+  try {
+    return ArrayBuffer.isView(value) && isUint8Array(value);
+  } catch {
+    return false;
+  }
 }
 
 function contentScriptByteLength(value) {
-  return typeof value === 'string' ? Buffer.byteLength(value) : typedArrayByteLength.call(value);
+  if (typeof value === 'string') return Buffer.byteLength(value);
+  try {
+    return typedArrayByteLength.call(value);
+  } catch {
+    return null;
+  }
 }
 
 function plural(count, singular, pluralForm = `${singular}s`) {
@@ -82,12 +93,15 @@ export function validateBundle(input) {
     return valid;
   });
 
-  const validContentScript = isContentScriptPayload(contentScript);
+  const measuredContentScriptSize = isContentScriptPayload(contentScript)
+    ? contentScriptByteLength(contentScript)
+    : null;
+  const validContentScript = measuredContentScriptSize !== null;
   if (!validContentScript) {
     errors.push('Content script must be a string, Buffer, or Uint8Array');
   }
 
-  const actualContentScriptSize = validContentScript ? contentScriptByteLength(contentScript) : 0;
+  const actualContentScriptSize = validContentScript ? measuredContentScriptSize : 0;
   if (validContentScript && actualContentScriptSize > MAX_CONTENT_SCRIPT_BYTES) {
     errors.push(`Content script exceeds ${MAX_CONTENT_SCRIPT_BYTES} bytes: ${actualContentScriptSize}`);
   }
