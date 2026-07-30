@@ -86,7 +86,7 @@ function normalizeTimelineFragment(
   candidate: string,
   identity: PullRequestIdentity,
 ): NormalizedTimelineFragment | undefined {
-  const url = trustedGitHubUrl(candidate);
+  const url = trustedGitHubUrl(candidate, { rejectRawFragmentDelimiter: true });
   if (!url || url.hash) return undefined;
 
   const legacyPath = `${pullRequestPath(identity)}/timeline`;

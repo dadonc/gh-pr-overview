@@ -107,8 +107,10 @@ describe('GitHub pull-request data pipeline', () => {
       '/octo\\demo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
       '/octo%2fdemo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
       '/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42#fragment',
+      '/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42#',
       '/octo/demo/pull/42/timeline',
       '/octo/demo/pull/42/timeline?after=',
+      '/octo/demo/pull/42/timeline?after=cursor#',
       '/octo/demo/pull/42/timeline?after=cursor&after_cursor=other',
       '/octo/demo/pull/42/timeline?after=cursor&source=fragment',
     ]) {
