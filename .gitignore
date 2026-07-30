@@ -12,6 +12,7 @@ node_modules
 stats.html
 stats-*.json
 test-results/
+coverage/
 .wxt
 web-ext.config.ts
 .worktrees/

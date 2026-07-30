@@ -37,6 +37,29 @@ The extension:
 The content script parses fetched documents with `DOMParser`. Fetched HTML is
 never inserted into the page or executed.
 
+## Release verification
+
+Run the consolidated automated gate before packaging a release:
+
+```sh
+npm run verify
+```
+
+### Manual signed-in Chrome Stable checklist (not automated)
+
+Use a disposable GitHub account and a disposable repository for these checks.
+Automated fixtures cannot prove them:
+
+- Public and private PR lists render.
+- Exact and progressive diff totals are correct.
+- Deferred threads show exact thread totals and honest agent lower bounds.
+- Filtering, scrolling, Turbo navigation, dynamic rows, and route exit work.
+- Native counters restore after route exit and extension disable.
+- No request leaves `github.com`.
+- Page and extension consoles contain no CSP/runtime errors.
+- Narrow viewport, keyboard focus, dark mode, and reduced motion remain usable.
+- Profiles, cookies, private HTML, HAR, trace, and screenshots are never committed.
+
 ## Develop and test
 
 Requirements: a current Node.js release and npm.
