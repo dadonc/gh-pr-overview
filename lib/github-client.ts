@@ -58,6 +58,11 @@ interface FetchSuccess {
 
 type FetchResult = FetchFailure | FetchSuccess;
 
+interface LoadOutcome {
+  retryableFailure: boolean;
+  summary: PullRequestRemoteSummary;
+}
+
 interface NormalizedTimelineFragment {
   dedupeKey: string;
   focusedPullRequestId: string | undefined;
@@ -203,12 +208,6 @@ function hasTimelineEvidence(document: Document): boolean {
   ));
 }
 
-function filesMayHideTimelineData(document: Document): boolean {
-  return Boolean(document.querySelector(
-    'include-fragment, [data-file-type="collapsed"], [data-file-type="suppressed"], [data-file-type="truncated"], [class*="js-diff-load"], [data-diff-truncated]',
-  ));
-}
-
 function isAuthenticationDocument(document: Document): boolean {
   const title = document.title.trim();
   const sessionForm = document.querySelector('form[action="/session"], form[action^="/session?"]');
@@ -252,7 +251,7 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
     });
   };
 
-  const loadUncached = async (identity: PullRequestIdentity, signal?: AbortSignal): Promise<{ cacheable: boolean; summary: PullRequestRemoteSummary }> => {
+  const loadUncached = async (identity: PullRequestIdentity, signal?: AbortSignal): Promise<LoadOutcome> => {
     const conversationTarget = canonicalUrl(identity, 'conversation');
     const filesTarget = canonicalUrl(identity, 'files');
     const settle = async (target: string, kind: PullRequestUrlKind): Promise<FetchResult> => {
@@ -279,7 +278,7 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
     if (!conversation.ok) {
       const message = conversation.error.message;
       return {
-        cacheable: false,
+        retryableFailure: true,
         summary: {
           agents: { message, status: 'error' },
           diff,
@@ -289,35 +288,24 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
     }
 
     const timelineDocuments: Document[] = [conversation.document];
-    const agentIncompleteReasons: string[] = [];
-    const reviewThreadIncompleteReasons: string[] = [];
-    const addIncompleteReason = (reason: string) => {
-      agentIncompleteReasons.push(reason);
-      reviewThreadIncompleteReasons.push(reason);
-    };
-    let fetchFailed = !files.ok;
-    if (!hasTimelineEvidence(conversation.document)) addIncompleteReason('GitHub did not expose recognizable timeline evidence.');
-    if (!files.ok) addIncompleteReason('The files page could not be loaded for inline review data.');
-    if (files.ok && filesMayHideTimelineData(files.document)) {
-      addIncompleteReason('The files page has unloaded or collapsed content that can hide inline review data.');
-    }
-    if (files.ok && diff.status === 'partial') {
-      addIncompleteReason(`The files page is incomplete for inline review data: ${diff.reason}`);
-    }
+    const fragmentReasons = new Set<string>();
+    const addFragmentReason = (reason: string) => fragmentReasons.add(reason);
+    let retryableFailure = !files.ok;
+    if (!hasTimelineEvidence(conversation.document)) addFragmentReason('GitHub did not expose recognizable timeline evidence.');
 
     let pinnedFocusedPullRequestId: string | undefined;
     const queuedFragments: NormalizedTimelineFragment[] = [];
     const addFragment = (candidate: string, isConversationLoader = false) => {
       const fragment = normalizeTimelineFragment(candidate, identity);
       if (!fragment) {
-        addIncompleteReason('GitHub exposed an invalid timeline fragment.');
+        addFragmentReason('GitHub exposed an invalid timeline fragment.');
         return;
       }
       if (fragment.focusedPullRequestId) {
         if (isConversationLoader && pinnedFocusedPullRequestId === undefined) {
           pinnedFocusedPullRequestId = fragment.focusedPullRequestId;
         } else if (pinnedFocusedPullRequestId !== fragment.focusedPullRequestId) {
-          addIncompleteReason('GitHub exposed an invalid timeline fragment.');
+          addFragmentReason('GitHub exposed an invalid timeline fragment.');
           return;
         }
       }
@@ -330,7 +318,7 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
     let followed = 0;
     while (queuedFragments.length > 0) {
       if (followed >= MAX_TIMELINE_FRAGMENTS) {
-        addIncompleteReason('GitHub exposed more than 20 timeline fragments.');
+        addFragmentReason('GitHub exposed more than 20 timeline fragments.');
         break;
       }
       const batch: NormalizedTimelineFragment[] = [];
@@ -345,28 +333,27 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
       const results = await Promise.all(batch.map(({ href }) => settle(href, 'fragment')));
       for (const result of results) {
         if (!result.ok) {
-          fetchFailed = true;
-          addIncompleteReason(`A timeline fragment could not be loaded: ${result.error.message}`);
+          retryableFailure = true;
+          addFragmentReason(`A timeline fragment could not be loaded: ${result.error.message}`);
           continue;
         }
         timelineDocuments.push(result.document);
-        if (!hasTimelineEvidence(result.document)) addIncompleteReason('A timeline fragment had no recognizable review data.');
+        if (!hasTimelineEvidence(result.document)) addFragmentReason('A timeline fragment had no recognizable review data.');
         for (const fragment of extractTimeline(result.document, identity).nextTimelineFragments) {
           addFragment(fragment);
         }
       }
     }
 
-    if (files.ok) timelineDocuments.push(files.document);
     const timeline = extractTimeline(timelineDocuments, identity);
-    if (!timeline.completeness.agents.isComplete) {
-      agentIncompleteReasons.push(...timeline.completeness.agents.reasons);
-    }
-    if (!timeline.completeness.reviewThreads.isComplete) {
-      reviewThreadIncompleteReasons.push(...timeline.completeness.reviewThreads.reasons);
-    }
-    const agentsComplete = agentIncompleteReasons.length === 0;
-    const reviewThreadsComplete = reviewThreadIncompleteReasons.length === 0;
+    const agentReasons = new Set([
+      ...fragmentReasons,
+      ...timeline.completeness.agents.reasons,
+    ]);
+    const threadReasons = new Set([
+      ...fragmentReasons,
+      ...timeline.completeness.reviewThreads.reasons,
+    ]);
     const threadData = classifyReviewThreads(timeline.threads);
     const agentData = aggregateAgentParticipation({
       comments: timeline.artifacts.comments,
@@ -379,11 +366,11 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
     });
 
     return {
-      cacheable: !fetchFailed && agentsComplete && reviewThreadsComplete && diff.status === 'ready',
+      retryableFailure,
       summary: {
-        agents: sectionFromCompleteness(agentData, agentsComplete, agentIncompleteReasons),
+        agents: sectionFromCompleteness(agentData, agentReasons.size === 0, [...agentReasons]),
         diff,
-        reviewThreads: sectionFromCompleteness(threadData, reviewThreadsComplete, reviewThreadIncompleteReasons),
+        reviewThreads: sectionFromCompleteness(threadData, threadReasons.size === 0, [...threadReasons]),
       },
     };
   };
@@ -405,7 +392,7 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
       if (cached) cache.delete(key);
 
       const loaded = await loadUncached(identity, signal);
-      if (loaded.cacheable && !signal?.aborted) cache.set(key, { expiresAt: clock() + CACHE_TTL_MS, summary: loaded.summary });
+      if (!loaded.retryableFailure && !signal?.aborted) cache.set(key, { expiresAt: clock() + CACHE_TTL_MS, summary: loaded.summary });
       return loaded.summary;
     },
   };

@@ -251,7 +251,7 @@ describe('GitHub pull-request data pipeline', () => {
     expect(result.agents.status).toBe('partial');
   });
 
-  it('retries a capped partial result instead of caching it', async () => {
+  it('caches a capped structural partial for the normal TTL', async () => {
     const loaders = Array.from({ length: 21 }, (_, index) =>
       `<div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=${index}"></div>`,
     ).join('');
@@ -264,7 +264,7 @@ describe('GitHub pull-request data pipeline', () => {
     expect((await client.loadPullRequest(identity)).reviewThreads.status).toBe('partial');
     expect((await client.loadPullRequest(identity)).reviewThreads.status).toBe('partial');
 
-    expect(fetcher).toHaveBeenCalledTimes(44);
+    expect(fetcher).toHaveBeenCalledTimes(22);
   });
 
   it('keeps accumulated conversation data as partial when a timeline fragment or files page fails', async () => {
@@ -282,7 +282,7 @@ describe('GitHub pull-request data pipeline', () => {
     expect(result.agents.status).toBe('partial');
   });
 
-  it('makes timeline-derived sections lower-bound partial when the files extractor is incomplete', async () => {
+  it('keeps timeline-derived sections isolated when the files extractor is incomplete', async () => {
     const conversation = '<div id="discussion_bucket"></div><div class="js-resolvable-timeline-thread-container" data-resolved="false"><input name="pull_request_review_thread_id" value="PRRT_one"></div>';
     const fetcher = vi.fn(async (url: RequestInfo | URL) =>
       response(String(url).endsWith('/files') ? diffRenderedPartialHtml : conversation, String(url)),
@@ -291,11 +291,11 @@ describe('GitHub pull-request data pipeline', () => {
     const result = await clientFor(fetcher).loadPullRequest(identity);
 
     expect(result.diff.status).toBe('partial');
-    expect(result.reviewThreads).toMatchObject({ data: { total: 1 }, status: 'partial' });
-    expect(result.agents.status).toBe('partial');
+    expect(result.reviewThreads).toMatchObject({ data: { total: 1 }, status: 'ready' });
+    expect(result.agents.status).toBe('ready');
   });
 
-  it('keeps exact diffstat totals ready while hidden file fragments make timeline data partial', async () => {
+  it('keeps timeline data ready while hidden file fragments leave the diffstat exact', async () => {
     const conversation = '<div id="discussion_bucket"></div><div class="js-resolvable-timeline-thread-container" data-resolved="false"><input name="pull_request_review_thread_id" value="PRRT_one"></div>';
     const filesWithHiddenReviews = `${diffAggregateHtml}<include-fragment data-fragment-url="/octo/demo/pull/42/files?fragment=hidden"></include-fragment>`;
     const fetcher = vi.fn(async (url: RequestInfo | URL) =>
@@ -305,11 +305,79 @@ describe('GitHub pull-request data pipeline', () => {
     const result = await clientFor(fetcher).loadPullRequest(identity);
 
     expect(result.diff).toMatchObject({ data: { filesChanged: 3 }, status: 'ready' });
-    expect(result.reviewThreads).toMatchObject({ data: { total: 1 }, status: 'partial' });
-    expect(result.agents.status).toBe('partial');
+    expect(result.reviewThreads).toMatchObject({ data: { total: 1 }, status: 'ready' });
+    expect(result.agents.status).toBe('ready');
   });
 
-  it('returns a conversation error without blocking the independent diff load', async () => {
+  it('keeps files-page fragments isolated from timeline completeness', async () => {
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      const value = String(url);
+      if (value.endsWith('/files')) return response(currentFilesHtml, value);
+      if (value.includes('timeline_focused_item')) return response(currentTimelineFragmentHtml, value);
+      return response(currentConversationHtml, value);
+    });
+
+    const summary = await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(summary.diff.status).toBe('ready');
+    expect(summary.reviewThreads.status).toBe('ready');
+    expect(summary.agents.status).toBe('partial');
+  });
+
+  it('caches structural partials for the normal TTL', async () => {
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      const value = String(url);
+      if (value.endsWith('/files')) return response(currentFilesHtml, value);
+      if (value.includes('timeline_focused_item')) return response(currentTimelineFragmentHtml, value);
+      return response(currentConversationHtml, value);
+    });
+    const client = clientFor(fetcher);
+
+    await client.loadPullRequest(identity);
+    await client.loadPullRequest(identity);
+
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not cache a result containing a failed timeline fragment', async () => {
+    const conversation = '<div id="discussion_bucket"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=retry"></div>';
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      const value = String(url);
+      if (value.includes('after=retry')) return failed();
+      return response(value.endsWith('/files') ? diffAggregateHtml : conversation, value);
+    });
+    const client = clientFor(fetcher);
+
+    await client.loadPullRequest(identity);
+    await client.loadPullRequest(identity);
+
+    expect(fetcher.mock.calls.filter(([url]) => String(url).includes('after=retry'))).toHaveLength(2);
+  });
+
+  it('leaves timeline sections ready when a files fetch failure produces only diff error', async () => {
+    const fetcher = vi.fn(async (url: RequestInfo | URL) =>
+      String(url).endsWith('/files') ? failed() : response('<div id="discussion_bucket"></div>', String(url)),
+    );
+
+    const summary = await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(summary.diff.status).toBe('error');
+    expect(summary.reviewThreads.status).toBe('ready');
+    expect(summary.agents.status).toBe('ready');
+  });
+
+  it('keeps files-page review artifacts out of agent aggregation', async () => {
+    const filesWithFakeReview = `${diffAggregateHtml}<div id="pullrequestreview-999"><a href="/apps/copilot-pull-request-reviewer">Copilot</a></div>`;
+    const fetcher = vi.fn(async (url: RequestInfo | URL) =>
+      response(String(url).endsWith('/files') ? filesWithFakeReview : '<div id="discussion_bucket"></div>', String(url)),
+    );
+
+    const summary = await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(summary.agents).toEqual({ data: [], status: 'ready' });
+  });
+
+  it('returns only timeline-section errors for a conversation failure while keeping diff independent', async () => {
     const fetcher = vi.fn(async (url: RequestInfo | URL) =>
       String(url).endsWith('/files') ? response(diffAggregateHtml, String(url)) : failed(),
     );
