@@ -54,7 +54,7 @@ describe('GitHub pull-request data pipeline', () => {
       ['https://github.com/octo/demo/pull/42/files', currentFilesHtml],
       ['https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42', currentTimelineFragmentHtml],
     ]);
-    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+    const fetcher = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) => {
       const value = String(url);
       const fixture = fixtureResponses.get(value);
       if (!fixture) throw new Error(`Unexpected fixture request: ${value}`);
@@ -91,11 +91,20 @@ describe('GitHub pull-request data pipeline', () => {
         status: 'ready',
       },
     });
-    expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+    const expectedUrls = [
       'https://github.com/octo/demo/pull/42',
       'https://github.com/octo/demo/pull/42/files',
       'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42',
-    ]);
+    ];
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(new Set(fetcher.mock.calls.map(([url]) => String(url)))).toEqual(new Set(expectedUrls));
+    for (const [, init] of fetcher.mock.calls) {
+      expect(init).toMatchObject({
+        credentials: 'same-origin',
+        method: 'GET',
+        redirect: 'error',
+      });
+    }
   });
 
   it('accepts valid leading-dot repository names without weakening owner validation', () => {

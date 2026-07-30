@@ -255,7 +255,7 @@ describe('extractTimeline', () => {
     const result = extractTimeline(parse(currentConversationHtml), timelineIdentity);
 
     expect(result.threads).toEqual([
-      { id: 'thread-2497380155', isOutdated: true, isResolved: true },
+      { id: 'thread-420000001', isOutdated: true, isResolved: true },
     ]);
     expect(result.completeness.reviewThreads.isComplete).toBe(true);
     expect(result.completeness.agents.isComplete).toBe(false);
@@ -281,24 +281,24 @@ describe('extractTimeline', () => {
 
     expect(result.artifacts.inlineComments).toContainEqual({
       actorLogin: 'copilot-pull-request-reviewer',
-      id: 'discussion_r3676782635',
+      id: 'discussion_r420000003',
     });
   });
 
   it.each([
-    ['wrong owner', '/other/demo/pull/42/threads/2497380155'],
-    ['wrong repository', '/octo/other/pull/42/threads/2497380155'],
-    ['wrong pull request', '/octo/demo/pull/43/threads/2497380155'],
-    ['wrong origin', 'https://evil.example/octo/demo/pull/42/threads/2497380155'],
-    ['credentials', 'https://user:secret@github.com/octo/demo/pull/42/threads/2497380155'],
-    ['empty username credentials', 'https://@github.com/octo/demo/pull/42/threads/2497380155'],
-    ['empty username and password credentials', 'https://:@github.com/octo/demo/pull/42/threads/2497380155'],
-    ['port', 'https://github.com:443/octo/demo/pull/42/threads/2497380155'],
-    ['traversal', '/octo/demo/pull/42/threads/../2497380155'],
-    ['encoded separator', '/octo/demo/pull/42/threads%2f2497380155'],
+    ['wrong owner', '/other/demo/pull/42/threads/420000001'],
+    ['wrong repository', '/octo/other/pull/42/threads/420000001'],
+    ['wrong pull request', '/octo/demo/pull/43/threads/420000001'],
+    ['wrong origin', 'https://evil.example/octo/demo/pull/42/threads/420000001'],
+    ['credentials', 'https://user:secret@github.com/octo/demo/pull/42/threads/420000001'],
+    ['empty username credentials', 'https://@github.com/octo/demo/pull/42/threads/420000001'],
+    ['empty username and password credentials', 'https://:@github.com/octo/demo/pull/42/threads/420000001'],
+    ['port', 'https://github.com:443/octo/demo/pull/42/threads/420000001'],
+    ['traversal', '/octo/demo/pull/42/threads/../420000001'],
+    ['encoded separator', '/octo/demo/pull/42/threads%2f420000001'],
     ['nonnumeric thread', '/octo/demo/pull/42/threads/not-a-number'],
-    ['hash', '/octo/demo/pull/42/threads/2497380155#discussion_r1'],
-    ['empty hash', '/octo/demo/pull/42/threads/2497380155#'],
+    ['hash', '/octo/demo/pull/42/threads/420000001#discussion_r1'],
+    ['empty hash', '/octo/demo/pull/42/threads/420000001#'],
   ])('rejects a deferred URL with %s', (_name, deferredUrl) => {
     const result = extractTimeline(parse(`
       <review-thread-collapsible
@@ -347,7 +347,7 @@ describe('extractTimeline', () => {
 
   it('marks malformed automated-comment JSON as partial without affecting thread completeness', () => {
     const result = extractTimeline(parse(`
-      <article id="discussion_r3676782635">
+      <article id="discussion_r420000003">
         <react-partial><script type="application/json" data-target="react-partial.embeddedData">{</script></react-partial>
       </article>
     `), timelineIdentity);

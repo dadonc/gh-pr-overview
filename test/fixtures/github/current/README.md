@@ -8,6 +8,8 @@
 - Sanitization: repository, users, cursor values, content, IDs, and file names
   are replaced; selector-bearing wrappers, endpoint shapes, state attributes,
   Unicode minus signs, and embedded JSON property paths are preserved.
+- Retained typed numeric IDs use the synthetic PR-42 series `420000001` through
+  `420000003` and preserve only the shapes each parser validates.
 - Tests never refresh these files from the network.
 
 Expected PR 42 summary:

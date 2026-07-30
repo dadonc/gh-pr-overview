@@ -353,8 +353,8 @@ The conversation fixture must include these reduced structures:
 </div>
 <review-thread-collapsible
   class="js-resolvable-timeline-thread-container"
-  data-deferred-content-url="/octo/demo/pull/42/threads/2497380155?rendering_on_files_tab=false"
-  data-hidden-comment-ids="3676782712"
+  data-deferred-content-url="/octo/demo/pull/42/threads/420000001?rendering_on_files_tab=false"
+  data-hidden-comment-ids="420000002"
   data-resolved="true">
   <span title="Label: Outdated">Outdated</span>
 </review-thread-collapsible>
@@ -373,7 +373,7 @@ The conversation fixture must include these reduced structures:
 ```
 
 The automated-comment fixture must contain one
-`id="discussion_r3676782635"` element with a
+`id="discussion_r420000003"` element with a
 `react-partial > script[type="application/json"][data-target="react-partial.embeddedData"]`
 whose JSON includes:
 
@@ -401,7 +401,7 @@ it('counts a current deferred shell exactly but marks hidden agent bodies partia
     identity,
   );
   expect(result.threads).toEqual([{
-    id: 'thread-2497380155',
+    id: 'thread-420000001',
     isOutdated: true,
     isResolved: true,
   }]);
@@ -433,7 +433,7 @@ it('extracts Copilot from a validated automated-comment payload', () => {
   );
   expect(result.artifacts.inlineComments).toContainEqual({
     actorLogin: 'copilot-pull-request-reviewer',
-    id: 'discussion_r3676782635',
+    id: 'discussion_r420000003',
   });
 });
 ```
