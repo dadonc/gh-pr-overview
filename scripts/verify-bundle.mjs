@@ -217,9 +217,7 @@ async function readBundleFiles(records) {
   return { contentScript, errors, files, sizes };
 }
 
-async function main() {
-  const bundlePath = process.argv[2] ?? '.output/chrome-mv3';
-
+export async function verifyBundle(bundlePath = '.output/chrome-mv3') {
   try {
     const scan = await scanBundle(bundlePath);
     const bundle = await readBundleFiles(scan.records);
@@ -237,6 +235,10 @@ async function main() {
     process.stderr.write(`Failed to verify Chrome bundle at ${bundlePath}: ${message}\n`);
     process.exitCode = 1;
   }
+}
+
+async function main() {
+  await verifyBundle(process.argv[2] ?? '.output/chrome-mv3');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

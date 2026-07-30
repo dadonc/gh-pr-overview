@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { validateManifest } from './verify-manifest.mjs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { validateManifest, verifyManifest } from './verify-manifest.mjs';
 
 const expectedManifest = {
   content_scripts: [
@@ -26,6 +30,20 @@ const expectedManifest = {
 };
 
 describe('validateManifest', () => {
+  const temporaryDirectories = [];
+  let originalExitCode;
+
+  beforeEach(() => {
+    originalExitCode = process.exitCode;
+    process.exitCode = undefined;
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    process.exitCode = originalExitCode;
+    await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })));
+  });
+
   it('accepts the minimal generated MV3 manifest', () => {
     expect(validateManifest(expectedManifest)).toEqual([]);
   });
@@ -131,5 +149,18 @@ describe('validateManifest', () => {
         128: 'starter.svg',
       },
     })).toContain('Manifest icons must be the packaged 16, 32, 48, 96, and 128px PNGs');
+  });
+
+  it('verifies a current manifest through the in-process CLI path', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'verify-manifest-'));
+    const manifestPath = join(directory, 'manifest.json');
+    temporaryDirectories.push(directory);
+    await writeFile(manifestPath, JSON.stringify(expectedManifest));
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    await verifyManifest(manifestPath);
+
+    expect(process.exitCode).toBeUndefined();
+    expect(stdout).toHaveBeenCalledWith(`Verified minimal MV3 manifest: ${manifestPath}\n`);
   });
 });

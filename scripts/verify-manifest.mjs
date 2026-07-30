@@ -97,8 +97,7 @@ export function validateManifest(manifest) {
   return errors;
 }
 
-async function main() {
-  const manifestPath = process.argv[2] ?? '.output/chrome-mv3/manifest.json';
+export async function verifyManifest(manifestPath = '.output/chrome-mv3/manifest.json') {
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   const errors = validateManifest(manifest);
 
@@ -109,6 +108,10 @@ async function main() {
   }
 
   process.stdout.write(`Verified minimal MV3 manifest: ${manifestPath}\n`);
+}
+
+async function main() {
+  await verifyManifest(process.argv[2] ?? '.output/chrome-mv3/manifest.json');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -3,9 +3,9 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { validateBundle } from './verify-bundle.mjs';
+import { validateBundle, verifyBundle } from './verify-bundle.mjs';
 
 const ALLOWED_FILES = [
   'content-scripts/content.js',
@@ -17,8 +17,16 @@ const ALLOWED_FILES = [
   'manifest.json',
 ];
 const temporaryBundles = [];
+let originalExitCode;
+
+beforeEach(() => {
+  originalExitCode = process.exitCode;
+  process.exitCode = undefined;
+});
 
 afterEach(async () => {
+  vi.restoreAllMocks();
+  process.exitCode = originalExitCode;
   await Promise.all(temporaryBundles.splice(0).map((directory) => rm(directory, { force: true, recursive: true })));
 });
 
@@ -226,6 +234,27 @@ describe('validateBundle', () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('Failed to verify Chrome bundle at .output/missing-bundle:');
+  });
+
+  it('verifies a complete bundle through the in-process CLI path', async () => {
+    const bundlePath = await createBundle();
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    await verifyBundle(bundlePath);
+
+    expect(process.exitCode).toBeUndefined();
+    expect(stdout).toHaveBeenCalledWith(`Verified Chrome bundle: ${bundlePath}\n`);
+  });
+
+  it('reports an invalid bundle through the in-process CLI path', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    await verifyBundle('.output/missing-bundle');
+
+    expect(process.exitCode).toBe(1);
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining(
+      'Failed to verify Chrome bundle at .output/missing-bundle:',
+    ));
   });
 
   it('rejects symbolic links and unexpected empty directories in a bundle', async () => {
