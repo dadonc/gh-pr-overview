@@ -56,6 +56,19 @@ describe('page reconciler', () => {
     expect(isPullRequestListRoute(new URL('https://github.com/o/r/issues'))).toBe(false);
   });
 
+  it('exposes reconciliation and cleanup without a navigation reset API', () => {
+    const reconciler = createPageReconciler({
+      document: page(row()),
+      client: { loadPullRequest: vi.fn(async () => remote) },
+      IntersectionObserver: undefined,
+      uiFactory: { mount() { return { remove: vi.fn(), update: vi.fn() }; } },
+    });
+
+    expect(reconciler).toEqual(expect.objectContaining({ cleanup: expect.any(Function), reconcile: expect.any(Function) }));
+    expect(reconciler).not.toHaveProperty('reset');
+    reconciler.cleanup();
+  });
+
   it('mount marker lives in the current row main content and never in native metadata', async () => {
     const document = page(currentPrListHtml);
     const mount = vi.fn(() => ({ remove: vi.fn(), update: vi.fn() }));

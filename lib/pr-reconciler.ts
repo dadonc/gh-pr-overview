@@ -379,6 +379,5 @@ export function createPageReconciler(options: PageReconcilerOptions) {
   return {
     cleanup() { stopped = true; observer?.disconnect(); observer = undefined; clear(); },
     reconcile,
-    reset() { stopped = false; clear(); reconcile(); },
   };
 }

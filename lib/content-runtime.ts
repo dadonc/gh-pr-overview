@@ -1,9 +1,18 @@
 import type { PullRequestClient, CardUiFactory, ObserverConstructor } from './pr-reconciler';
 import { createPageReconciler } from './pr-reconciler';
 
+export interface WxtLocationChangeEvent extends Event {
+  readonly newUrl: URL;
+}
+
 export interface ContentScriptLifecycle {
-  addEventListener(target: Window, type: 'wxt:locationchange', listener: EventListener): void;
+  addEventListener(
+    target: Window,
+    type: 'wxt:locationchange',
+    listener: (event: WxtLocationChangeEvent) => void,
+  ): void;
   onInvalidated(listener: () => void): () => void;
+  requestAnimationFrame(callback: FrameRequestCallback): number;
 }
 
 export interface ContentRuntimeOptions {
@@ -24,7 +33,20 @@ export function startContentRuntime(options: ContentRuntimeOptions) {
     uiFactory: options.uiFactory,
   });
   reconciler.reconcile();
-  options.ctx.addEventListener(window, 'wxt:locationchange', () => reconciler.reset());
-  options.ctx.onInvalidated(() => reconciler.cleanup());
+  let pendingUrl: URL | undefined;
+  let framePending = false;
+  let invalidated = false;
+  const scheduleCommittedReconcile = (newUrl: URL) => {
+    pendingUrl = newUrl;
+    if (framePending) return;
+    framePending = true;
+    options.ctx.requestAnimationFrame(() => {
+      framePending = false;
+      const expected = pendingUrl;
+      if (!invalidated && expected && document.location.href === expected.href) reconciler.reconcile();
+    });
+  };
+  options.ctx.addEventListener(window, 'wxt:locationchange', (event) => scheduleCommittedReconcile(event.newUrl));
+  options.ctx.onInvalidated(() => { invalidated = true; reconciler.cleanup(); });
   return reconciler;
 }
