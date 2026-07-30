@@ -207,6 +207,30 @@ describe('GitHub pull-request data pipeline', () => {
     });
   });
 
+  it('keeps an unrelated event-only fragment structurally partial instead of exact ready zeroes', async () => {
+    const conversation = '<div id="discussion_bucket"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=commit"></div>';
+    const eventFragment = '<div class="TimelineItem" id="event-commit">someone committed</div>';
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      const value = String(url);
+      if (value.endsWith('/files')) return response(diffAggregateHtml, value);
+      if (value.includes('after=commit')) return response(eventFragment, value);
+      return response(conversation, value);
+    });
+
+    const summary = await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(summary.reviewThreads).toEqual({
+      data: { resolvedOrOutdated: 0, total: 0, unresolved: 0 },
+      reason: 'A timeline fragment had no recognizable review data.',
+      status: 'partial',
+    });
+    expect(summary.agents).toEqual({
+      data: [],
+      reason: 'A timeline fragment had no recognizable review data.',
+      status: 'partial',
+    });
+  });
+
   it('uses a credentialed GET with the caller abort signal and rejects redirected cross-origin content', async () => {
     const signal = new AbortController().signal;
     const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {

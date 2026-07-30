@@ -51,15 +51,9 @@ const recognizableTimelineEvidenceSelector = [
   '[id^="issuecomment-"]',
   '[id^="pullrequestreview-"]',
   inlineResponseSelector,
-  reviewRequestSelector,
-  reviewEventSelector,
   '[data-reaction-content="eyes"]',
   timelineLoaderSelector,
 ].join(', ');
-
-export function hasRecognizableTimelineEvidence(document: Document): boolean {
-  return Boolean(document.querySelector(recognizableTimelineEvidenceSelector));
-}
 
 function documentsFrom(input: Document | readonly Document[]): readonly Document[] { return 'querySelector' in input ? [input] : input; }
 function textLogin(element: Element | null): string | undefined {
@@ -170,6 +164,42 @@ function eventAgentLogin(element: Element): string | undefined {
   }
   return loginForAgentLabel(element.querySelector('strong')?.textContent);
 }
+function reviewRequestFrom(element: Element): FormalReviewRequestExtraction | undefined {
+  const actionValue = element.getAttribute('data-review-request-action')?.toLowerCase();
+  const text = element.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+  const usesStructuredAction = actionValue === 'removed' || actionValue === 'requested';
+  const action = actionValue === 'removed'
+    ? 'removed'
+    : actionValue === 'requested'
+      ? 'requested'
+      : /\b(?:requested a review from|AI review requested)\b/i.test(text)
+        ? 'requested'
+        : /\bremoved review request (?:for|from)\b/i.test(text)
+          ? 'removed'
+          : undefined;
+  const id = stableId(element);
+  const requestedLogin = usesStructuredAction
+    ? textLogin(element) ?? eventAgentLogin(element)
+    : eventAgentLogin(element) ?? textLogin(element);
+  return action && id && requestedLogin
+    ? { action, id, requestedLogin }
+    : undefined;
+}
+function reviewEventFrom(element: Element): ReviewEventExtraction | undefined {
+  const usesStructuredEvent = element.getAttribute('data-review-event') === 'started-reviewing';
+  const started = usesStructuredEvent || /\bstarted reviewing\b/i.test(element.textContent?.replace(/\s+/g, ' ').trim() ?? '');
+  if (!started) return undefined;
+  const id = stableId(element);
+  const login = usesStructuredEvent
+    ? actorLogin(element) ?? eventAgentLogin(element)
+    : eventAgentLogin(element) ?? actorLogin(element);
+  return id && login ? { action: 'started-reviewing', actorLogin: login, id } : undefined;
+}
+export function hasRecognizableTimelineEvidence(document: Document): boolean {
+  return Boolean(document.querySelector(recognizableTimelineEvidenceSelector)) ||
+    [...document.querySelectorAll(reviewRequestSelector)].some((element) => Boolean(reviewRequestFrom(element))) ||
+    [...document.querySelectorAll(reviewEventSelector)].some((element) => Boolean(reviewEventFrom(element)));
+}
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
@@ -251,36 +281,15 @@ export function extractTimeline(
       if (!element.closest(threadRootSelector)) addResponse('inline', element);
     }
     for (const element of document.querySelectorAll<HTMLElement>(reviewRequestSelector)) {
-      const actionValue = element.getAttribute('data-review-request-action')?.toLowerCase();
-      const text = element.textContent?.replace(/\s+/g, ' ').trim() ?? '';
-      const usesStructuredAction = actionValue === 'removed' || actionValue === 'requested';
-      const action = actionValue === 'removed'
-        ? 'removed'
-        : actionValue === 'requested'
-          ? 'requested'
-          : /\b(?:requested a review from|AI review requested)\b/i.test(text)
-            ? 'requested'
-            : /\bremoved review request (?:for|from)\b/i.test(text)
-              ? 'removed'
-              : undefined;
-      const id = stableId(element);
-      const requestedLogin = usesStructuredAction
-        ? textLogin(element) ?? eventAgentLogin(element)
-        : eventAgentLogin(element) ?? textLogin(element);
-      if (action && id && requestedLogin) {
-        add('review-request', reviewRequests, { action, id, requestedLogin });
+      const request = reviewRequestFrom(element);
+      if (request) {
+        add('review-request', reviewRequests, request);
       }
     }
     for (const element of document.querySelectorAll<HTMLElement>(reviewEventSelector)) {
-      const usesStructuredEvent = element.getAttribute('data-review-event') === 'started-reviewing';
-      const started = usesStructuredEvent || /\bstarted reviewing\b/i.test(element.textContent?.replace(/\s+/g, ' ').trim() ?? '');
-      if (!started) continue;
-      const id = stableId(element);
-      const login = usesStructuredEvent
-        ? actorLogin(element) ?? eventAgentLogin(element)
-        : eventAgentLogin(element) ?? actorLogin(element);
-      if (id && login) {
-        add('review-event', reviewEvents, { action: 'started-reviewing', actorLogin: login, id });
+      const event = reviewEventFrom(element);
+      if (event) {
+        add('review-event', reviewEvents, event);
       }
     }
     for (const element of document.querySelectorAll<HTMLElement>('[data-reaction-content="eyes"]')) { const id = stableId(element) ?? element.getAttribute('data-reaction-id') ?? undefined; if (!id) continue; for (const login of actorLogins(element, true)) { const accountLogin = normalizeAgentAccountLogin(login); if (accountLogin) add('reaction', reactions, { actorLogin: login, content: 'eyes', id }, `${id}\0${accountLogin}`); } }
