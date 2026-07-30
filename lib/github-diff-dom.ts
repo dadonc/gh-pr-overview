@@ -28,6 +28,89 @@ function parseMetric(text: string, label: string): number | undefined {
   return match ? Number(match[1]!.replaceAll(',', '')) : undefined;
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function parseEmbeddedMetric(value: unknown): number | undefined {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  }
+  return typeof value === 'string' ? parseUnsignedMetric(value) : undefined;
+}
+
+function extractChangesAppSummary(document: Document): DiffExtraction | undefined {
+  const scripts = document.querySelectorAll(
+    'react-app[app-name="pull-requests"] '
+    + 'script[type="application/json"][data-target="react-app.embeddedData"]',
+  );
+
+  for (const script of scripts) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(script.textContent ?? '');
+    } catch {
+      continue;
+    }
+
+    if (!isObject(parsed) || !isObject(parsed.payload)) continue;
+    const route = parsed.payload.pullRequestsChangesRoute;
+    if (!isObject(route) || !Array.isArray(route.diffSummaries)) continue;
+    if (route.diffSummaries.length === 0) continue;
+
+    let additions = 0;
+    let deletions = 0;
+    let isValid = true;
+
+    for (const summary of route.diffSummaries) {
+      if (!isObject(summary) || typeof summary.changeType !== 'string') {
+        isValid = false;
+        break;
+      }
+
+      const linesAdded = parseEmbeddedMetric(summary.linesAdded);
+      const linesDeleted = parseEmbeddedMetric(summary.linesDeleted);
+      const linesChanged = parseEmbeddedMetric(summary.linesChanged);
+      if (
+        linesAdded === undefined
+        || linesDeleted === undefined
+        || (
+          linesChanged !== undefined
+          && linesChanged !== linesAdded + linesDeleted
+        )
+        || !Number.isSafeInteger(additions + linesAdded)
+        || !Number.isSafeInteger(deletions + linesDeleted)
+      ) {
+        isValid = false;
+        break;
+      }
+
+      additions += linesAdded;
+      deletions += linesDeleted;
+    }
+
+    if (!isValid) continue;
+
+    const filesChanged = route.diffSummaries.length;
+    const filesLimit = isObject(route.pageLimits)
+      ? parseEmbeddedMetric(route.pageLimits.filesLimit)
+      : undefined;
+    const reachedFilesLimit = filesLimit !== undefined && filesChanged >= filesLimit;
+
+    return {
+      completeness: reachedFilesLimit
+        ? {
+            isComplete: false,
+            reasons: ['GitHub limited the new files-changed summary.'],
+          }
+        : { isComplete: true, reasons: [] },
+      data: { additions, deletions, filesChanged },
+    };
+  }
+
+  return undefined;
+}
+
 export function extractDiffSummary(document: Document): DiffExtraction {
   const filesCounter = document.querySelector<HTMLElement>('#files_tab_counter');
   const diffstat = document.querySelector<HTMLElement>('#diffstat');
@@ -59,6 +142,9 @@ export function extractDiffSummary(document: Document): DiffExtraction {
       },
     };
   }
+
+  const changesAppSummary = extractChangesAppSummary(document);
+  if (changesAppSummary) return changesAppSummary;
 
   for (const region of document.querySelectorAll<HTMLElement>(
     '.diffstat, [data-diffstat], [data-testid="diffstat"]',

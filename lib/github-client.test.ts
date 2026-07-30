@@ -4,6 +4,7 @@ import diffAggregateHtml from '../test/fixtures/github/diff-aggregate.html?raw';
 import diffRenderedPartialHtml from '../test/fixtures/github/diff-rendered-partial.html?raw';
 import timelineHtml from '../test/fixtures/github/timeline.html?raw';
 import currentPrListHtml from '../test/fixtures/github/current/pr-list.html?raw';
+import currentChangesHtml from '../test/fixtures/github/current/changes.html?raw';
 import currentConversationHtml from '../test/fixtures/github/current/conversation.html?raw';
 import currentFilesHtml from '../test/fixtures/github/current/files.html?raw';
 import currentTimelineFragmentHtml from '../test/fixtures/github/current/timeline-fragment.html?raw';
@@ -199,7 +200,7 @@ describe('GitHub pull-request data pipeline', () => {
         redirect: 'follow',
       });
       return value.endsWith('/files')
-        ? response(currentFilesHtml, 'https://github.com/octo/demo/pull/42/changes')
+        ? response(currentChangesHtml, 'https://github.com/octo/demo/pull/42/changes')
         : response('<div id="discussion_bucket"></div>', value);
     });
 
@@ -210,7 +211,7 @@ describe('GitHub pull-request data pipeline', () => {
       expect.objectContaining({ redirect: 'follow' }),
     );
     expect(summary.diff).toEqual({
-      data: { additions: 524, deletions: 353, filesChanged: 18 },
+      data: { additions: 584, deletions: 174, filesChanged: 14 },
       status: 'ready',
     });
   });

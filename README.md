@@ -102,11 +102,12 @@ and refresh the GitHub tab.
 
 GitHub may redirect a pull request's legacy `/files` URL to its newer
 same-pull-request `/changes` URL. The extension follows and validates that
-redirect. If the files segment still remains `— files` and its tooltip reports
-`Failed to fetch`, test the extension in a clean Chrome profile. Another
-extension, privacy filter, or managed profile policy may be blocking the
-request. Allow GitHub pull-request files-page requests in the blocker or policy,
-then reload both the unpacked extension and the GitHub tab.
+redirect and reads the exact per-file summaries exposed by the new page. If the
+files segment still remains `— files` and its tooltip reports `Failed to fetch`,
+test the extension in a clean Chrome profile. Another extension, privacy filter,
+or managed profile policy may be blocking the request. Allow GitHub pull-request
+files-page requests in the blocker or policy, then reload both the unpacked
+extension and the GitHub tab.
 
 This project is source-controlled for local testing and review. It has not been
 published to the Chrome Web Store.

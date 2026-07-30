@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import currentPrListHtml from '../test/fixtures/github/current/pr-list.html?raw';
+import currentChangesHtml from '../test/fixtures/github/current/changes.html?raw';
 import currentFilesHtml from '../test/fixtures/github/current/files.html?raw';
 import currentFilesNoAggregateHtml from '../test/fixtures/github/current/files-no-aggregate.html?raw';
 import currentAutomatedCommentHtml from '../test/fixtures/github/current/automated-comment.html?raw';
@@ -742,6 +743,13 @@ describe('extractTimeline', () => {
 });
 
 describe('extractDiffSummary', () => {
+  it('uses exact per-file summaries from the new pull requests changes app', () => {
+    expect(extractDiffSummary(parse(currentChangesHtml))).toEqual({
+      completeness: { isComplete: true, reasons: [] },
+      data: { additions: 584, deletions: 174, filesChanged: 14 },
+    });
+  });
+
   it('uses the current exact aggregate even when rendered files are progressive', () => {
     const result = extractDiffSummary(parse(currentFilesHtml));
 
@@ -797,6 +805,57 @@ describe('extractDiffSummary', () => {
     expect(result).toEqual({
       completeness: { isComplete: true, reasons: [] },
       data: { additions: 1, deletions: 0, filesChanged: 1 },
+    });
+  });
+
+  it('ignores malformed or unrelated embedded diff summaries', () => {
+    const result = extractDiffSummary(parse(`
+      <react-app app-name="issues">
+        <script type="application/json" data-target="react-app.embeddedData">
+          {"payload":{"pullRequestsChangesRoute":{"diffSummaries":[
+            {"changeType":"MODIFIED","linesAdded":99,"linesChanged":100,"linesDeleted":1}
+          ]}}}
+        </script>
+      </react-app>
+      <react-app app-name="pull-requests">
+        <script type="application/json" data-target="react-app.embeddedData">
+          {"payload":{"pullRequestsChangesRoute":{"diffSummaries":[
+            {"changeType":"MODIFIED","linesAdded":5,"linesChanged":999,"linesDeleted":1}
+          ]}}}
+        </script>
+      </react-app>
+      <div class="js-file file">
+        <a title="src/a.ts">src/a.ts</a>
+        <span class="blob-code-addition" data-line-number="1">+a</span>
+      </div>
+    `));
+
+    expect(result).toEqual({
+      completeness: { isComplete: true, reasons: [] },
+      data: { additions: 1, deletions: 0, filesChanged: 1 },
+    });
+  });
+
+  it('marks a new changes-app summary partial when it reaches GitHub’s file limit', () => {
+    const result = extractDiffSummary(parse(`
+      <react-app app-name="pull-requests">
+        <script type="application/json" data-target="react-app.embeddedData">
+          {"payload":{"pullRequestsChangesRoute":{
+            "diffSummaries":[
+              {"changeType":"MODIFIED","linesAdded":5,"linesChanged":6,"linesDeleted":1}
+            ],
+            "pageLimits":{"filesLimit":1}
+          }}}
+        </script>
+      </react-app>
+    `));
+
+    expect(result).toEqual({
+      completeness: {
+        isComplete: false,
+        reasons: ['GitHub limited the new files-changed summary.'],
+      },
+      data: { additions: 5, deletions: 1, filesChanged: 1 },
     });
   });
 
