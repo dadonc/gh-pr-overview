@@ -46,7 +46,7 @@ test('boots the unpacked extension with a rendered, isolated shadow card', async
   await expect(extension.page.locator('[id^="issue_"].js-issue-row')).toHaveCount(1);
   await expect(host).toHaveCount(1);
   await expect.poll(() => card.evaluate(readVisibleCardLine))
-    .toBe('2 comments · 0 unresolved · −353/+524 18 files · Copilot 1');
+    .toBe('2 comments · 0 unresolved · −353/+524 · 18 files · Copilot 1');
   await expect(nativeCounter).toBeHidden();
 
   const typography = await card.evaluate((element) => {
@@ -138,7 +138,7 @@ test('keeps the strict line inside the row and scrolls it internally at narrow w
   const row = extension.page.locator('#issue_42');
   const card = row.locator('github-pr-overview').locator('.pr-overview-card');
   await expect.poll(() => card.evaluate(readVisibleCardLine))
-    .toBe('2 comments · 0 unresolved · −353/+524 18 files · Copilot 1');
+    .toBe('2 comments · 0 unresolved · −353/+524 · 18 files · Copilot 1');
 
   const layout = await card.evaluate((element) => {
     const visibleChildren = [...element.querySelectorAll<HTMLElement>(
@@ -186,7 +186,7 @@ test('reconciles inserted rows and restores native UI across pushState remounts'
   const nativeCounter = row.locator('a[aria-label="2 comments"]');
   await expect(host).toHaveCount(1);
   await expect.poll(() => host.locator('.pr-overview-card').evaluate(readVisibleCardLine))
-    .toBe('2 comments · 0 unresolved · −353/+524 18 files · Copilot 1');
+    .toBe('2 comments · 0 unresolved · −353/+524 · 18 files · Copilot 1');
   await expect(nativeCounter).toBeHidden();
   const pristineNativeCounter = await extension.nativeCounterSnapshotsAtHostConnection().then((snapshots) => snapshots[0]!);
 
@@ -200,7 +200,7 @@ test('reconciles inserted rows and restores native UI across pushState remounts'
   const inserted = extension.page.locator('#issue_420');
   await expect(inserted.locator('github-pr-overview')).toHaveCount(1);
   await expect.poll(() => inserted.locator('.pr-overview-card').evaluate(readVisibleCardLine))
-    .toBe('2 comments · 0 unresolved · −353/+524 18 files · Copilot 1');
+    .toBe('2 comments · 0 unresolved · −353/+524 · 18 files · Copilot 1');
   await expect(extension.page.locator('github-pr-overview')).toHaveCount(2);
 
   await inserted.evaluate((element) => element.remove());
@@ -223,7 +223,7 @@ test('reconciles inserted rows and restores native UI across pushState remounts'
   const remountedHost = remountedRow.locator('github-pr-overview');
   await expect(remountedHost).toHaveCount(1);
   await expect.poll(() => remountedHost.locator('.pr-overview-card').evaluate(readVisibleCardLine))
-    .toBe('7 comments · 0 unresolved · −353/+524 18 files · Copilot 1');
+    .toBe('7 comments · 0 unresolved · −353/+524 · 18 files · Copilot 1');
   await expect(remountedHost).toHaveCount(1);
   await expect(extension.page.locator('github-pr-overview')).toHaveCount(1);
 

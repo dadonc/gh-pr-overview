@@ -28,7 +28,7 @@ describe('PullRequestCard', () => {
   it('renders the approved single-line token order with distinct links and explicit separators', () => {
     render(<PullRequestCard summary={ready} conversationHref="/octo/demo/pull/42" filesHref="/octo/demo/pull/42/files" />);
 
-    expect(visibleCardText()).toBe('23 comments · 2 unresolved · −81/+340 12 files · Codex 3 · Claude 0');
+    expect(visibleCardText()).toBe('23 comments · 2 unresolved · −81/+340 · 12 files · Codex 3 · Claude 0');
 
     const comments = screen.getByRole('link', { name: '23 comments' });
     const unresolved = screen.getByRole('link', { name: '2 unresolved review threads' });
@@ -46,6 +46,7 @@ describe('PullRequestCard', () => {
     const separators = screen.getAllByText('·', { selector: '.separator' });
     expect(separators).toHaveLength(4);
     for (const separator of separators) expect(separator).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByText('·', { selector: '.diff-separator' })).toHaveAttribute('aria-hidden', 'true');
   });
 
   it('renders exact zero totals and requested-only agents without fabrication', () => {
@@ -59,7 +60,7 @@ describe('PullRequestCard', () => {
       totalComments: { data: { count: 0, href: '/o/r/pull/1' }, status: 'ready' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
-    expect(visibleCardText()).toBe('0 comments · 0 unresolved · −81/+340 12 files · Gemini 0');
+    expect(visibleCardText()).toBe('0 comments · 0 unresolved · −81/+340 · 12 files · Gemini 0');
     expect(screen.getByRole('link', { name: '0 unresolved review threads' })).not.toHaveClass('unresolved');
   });
 
@@ -70,7 +71,7 @@ describe('PullRequestCard', () => {
       filesHref="/o/r/pull/1/files"
     />);
 
-    expect(visibleCardText()).toBe('23 comments · 2 unresolved · −81/+340 12 files · No AI agents');
+    expect(visibleCardText()).toBe('23 comments · 2 unresolved · −81/+340 · 12 files · No AI agents');
   });
 
   it('keeps loading, partial, and error states in their fixed line positions', () => {
@@ -82,7 +83,7 @@ describe('PullRequestCard', () => {
       agents: { status: 'loading' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
-    expect(visibleCardText()).toBe('— comments · 2 unresolved · −81+/+340+ 12+ files · Loading agents…');
+    expect(visibleCardText()).toBe('— comments · 2 unresolved · −81+/+340+ · 12+ files · Loading agents…');
     expect(screen.getByText('— comments')).toHaveAttribute('title', 'GitHub counter is malformed.');
     expect(screen.getByRole('link', { name: 'At least 2 unresolved review threads' })).toHaveAttribute('title', 'More content is loading.');
     expect(screen.getByRole('link', { name: 'At least 81 deletions, 340 additions, 12 files changed' })).toHaveAttribute('title', 'Collapsed files.');
@@ -97,7 +98,7 @@ describe('PullRequestCard', () => {
       diff: { data: { additions: 1, deletions: 1, filesChanged: 1 }, status: 'ready' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
-    expect(visibleCardText()).toBe('1 comment · 1 unresolved · −1/+1 1 file · Codex 3 · Claude 0');
+    expect(visibleCardText()).toBe('1 comment · 1 unresolved · −1/+1 · 1 file · Codex 3 · Claude 0');
     expect(screen.getByRole('link', { name: '1 unresolved review thread' })).toBeVisible();
     expect(screen.getByRole('link', { name: '1 deletion, 1 addition, 1 file changed' })).toBeVisible();
 
@@ -124,7 +125,7 @@ describe('PullRequestCard', () => {
       agents: { data: [], reason: 'timeline is incomplete', status: 'partial' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
-    expect(visibleCardText()).toBe('23+ comments · 0 unresolved · −81/+340 12 files · No AI agents detected yet');
+    expect(visibleCardText()).toBe('23+ comments · 0 unresolved · −81/+340 · 12 files · No AI agents detected yet');
     expect(screen.getByText('23+ comments')).toHaveAttribute('aria-describedby');
     const unresolved = screen.getByRole('link', { name: 'At least 0 unresolved review threads' });
     expect(unresolved).toHaveAttribute('aria-describedby');
@@ -158,12 +159,12 @@ describe('PullRequestCard', () => {
     [
       'total comments',
       { ...ready, totalComments: { status: 'loading' } },
-      'Loading comments… · 2 unresolved · −81/+340 12 files · Codex 3 · Claude 0',
+      'Loading comments… · 2 unresolved · −81/+340 · 12 files · Codex 3 · Claude 0',
     ],
     [
       'review threads',
       { ...ready, reviewThreads: { status: 'loading' } },
-      '23 comments · Loading unresolved… · −81/+340 12 files · Codex 3 · Claude 0',
+      '23 comments · Loading unresolved… · −81/+340 · 12 files · Codex 3 · Claude 0',
     ],
     [
       'changed files',
@@ -173,7 +174,7 @@ describe('PullRequestCard', () => {
     [
       'AI agents',
       { ...ready, agents: { status: 'loading' } },
-      '23 comments · 2 unresolved · −81/+340 12 files · Loading agents…',
+      '23 comments · 2 unresolved · −81/+340 · 12 files · Loading agents…',
     ],
   ] as const satisfies readonly [string, PullRequestSummary, string][])('keeps the exact line while only %s is loading', (sectionName, loading, line) => {
     render(<PullRequestCard summary={loading} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);

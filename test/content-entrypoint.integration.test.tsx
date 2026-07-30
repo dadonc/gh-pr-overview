@@ -129,7 +129,7 @@ it('renders the real content entrypoint with fixture-backed data and restores th
   expect(wxtBoundary.options).not.toHaveProperty('cssInjectionMode');
 
   await waitFor(() => {
-    expect(renderedOverviewLine()).toBe('2 comments · 0 unresolved · −353/+524 18 files · Copilot 1');
+    expect(renderedOverviewLine()).toBe('2 comments · 0 unresolved · −353/+524 · 18 files · Copilot 1');
   });
   expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual(expect.arrayContaining([...fixtures.keys()]));
   expect(fetcher).toHaveBeenCalledTimes(3);
