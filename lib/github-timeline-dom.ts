@@ -69,8 +69,10 @@ function deferredThreadIdentity(
 ): string | undefined {
   if (!isValidPullRequestIdentity(identity)) return undefined;
 
-  const url = trustedGitHubUrl(root.getAttribute('data-deferred-content-url'));
-  if (!url || url.hash) return undefined;
+  const url = trustedGitHubUrl(root.getAttribute('data-deferred-content-url'), {
+    rejectRawFragmentDelimiter: true,
+  });
+  if (!url) return undefined;
 
   const path = pullRequestPath(identity).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const match = url.pathname.match(new RegExp(`^${path}/threads/([1-9]\\d*)$`, 'i'));
@@ -229,6 +231,7 @@ export function extractTimeline(
     for (const element of document.querySelectorAll<HTMLElement>('[data-review-request-action], [data-review-requested-login], .TimelineItem[id^="event-"]')) {
       const actionValue = element.getAttribute('data-review-request-action')?.toLowerCase();
       const text = element.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+      const usesStructuredAction = actionValue === 'removed' || actionValue === 'requested';
       const action = actionValue === 'removed'
         ? 'removed'
         : actionValue === 'requested'
@@ -239,16 +242,21 @@ export function extractTimeline(
               ? 'removed'
               : undefined;
       const id = stableId(element);
-      const requestedLogin = textLogin(element) ?? eventAgentLogin(element);
+      const requestedLogin = usesStructuredAction
+        ? textLogin(element) ?? eventAgentLogin(element)
+        : eventAgentLogin(element) ?? textLogin(element);
       if (action && id && requestedLogin) {
         add('review-request', reviewRequests, { action, id, requestedLogin });
       }
     }
     for (const element of document.querySelectorAll<HTMLElement>('[data-review-event="started-reviewing"], .TimelineItem[id^="event-"]')) {
-      const started = element.getAttribute('data-review-event') === 'started-reviewing' || /\bstarted reviewing\b/i.test(element.textContent?.replace(/\s+/g, ' ').trim() ?? '');
+      const usesStructuredEvent = element.getAttribute('data-review-event') === 'started-reviewing';
+      const started = usesStructuredEvent || /\bstarted reviewing\b/i.test(element.textContent?.replace(/\s+/g, ' ').trim() ?? '');
       if (!started) continue;
       const id = stableId(element);
-      const login = actorLogin(element) ?? eventAgentLogin(element);
+      const login = usesStructuredEvent
+        ? actorLogin(element) ?? eventAgentLogin(element)
+        : eventAgentLogin(element) ?? actorLogin(element);
       if (id && login) {
         add('review-event', reviewEvents, { action: 'started-reviewing', actorLogin: login, id });
       }

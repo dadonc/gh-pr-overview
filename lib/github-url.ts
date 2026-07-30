@@ -2,23 +2,31 @@ import type { PullRequestIdentity } from './domain';
 
 export const GITHUB_ORIGIN = 'https://github.com';
 
+interface TrustedGitHubUrlOptions {
+  rejectRawFragmentDelimiter?: boolean;
+}
+
 export function trustedGitHubUrl(
   candidate: string | null | undefined,
+  options: TrustedGitHubUrlOptions = {},
 ): URL | undefined {
   if (!candidate) return undefined;
-  const authority = candidate.trim().match(/^[A-Za-z][A-Za-z\d+.-]*:\/\/([^/?#]*)/)?.[1];
+  const raw = candidate.trim();
+  const authority = raw.match(/^[A-Za-z][A-Za-z\d+.-]*:\/\/([^/?#]*)/)?.[1];
   const hostAndPort = authority?.split('@').at(-1);
-  const rawPath = candidate.slice(0, candidate.search(/[?#]/) === -1 ? candidate.length : candidate.search(/[?#]/));
+  const rawPath = raw.slice(0, raw.search(/[?#]/) === -1 ? raw.length : raw.search(/[?#]/));
   if (
-    candidate.trimStart().startsWith('//') ||
+    raw.startsWith('//') ||
+    authority?.includes('@') ||
     hostAndPort?.includes(':') ||
+    options.rejectRawFragmentDelimiter && raw.includes('#') ||
     /(?:^|\/)\.\.?(?=\/|$)/.test(rawPath) ||
     /\\|%(?:2f|5c|2e)/i.test(rawPath)
   ) return undefined;
 
   let url: URL;
   try {
-    url = new URL(candidate, GITHUB_ORIGIN);
+    url = new URL(raw, GITHUB_ORIGIN);
   } catch {
     return undefined;
   }

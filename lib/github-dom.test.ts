@@ -272,11 +272,14 @@ describe('extractTimeline', () => {
     ['wrong pull request', '/octo/demo/pull/43/threads/2497380155'],
     ['wrong origin', 'https://evil.example/octo/demo/pull/42/threads/2497380155'],
     ['credentials', 'https://user:secret@github.com/octo/demo/pull/42/threads/2497380155'],
+    ['empty username credentials', 'https://@github.com/octo/demo/pull/42/threads/2497380155'],
+    ['empty username and password credentials', 'https://:@github.com/octo/demo/pull/42/threads/2497380155'],
     ['port', 'https://github.com:443/octo/demo/pull/42/threads/2497380155'],
     ['traversal', '/octo/demo/pull/42/threads/../2497380155'],
     ['encoded separator', '/octo/demo/pull/42/threads%2f2497380155'],
     ['nonnumeric thread', '/octo/demo/pull/42/threads/not-a-number'],
     ['hash', '/octo/demo/pull/42/threads/2497380155#discussion_r1'],
+    ['empty hash', '/octo/demo/pull/42/threads/2497380155#'],
   ])('rejects a deferred URL with %s', (_name, deferredUrl) => {
     const result = extractTimeline(parse(`
       <review-thread-collapsible
@@ -287,6 +290,40 @@ describe('extractTimeline', () => {
     `), timelineIdentity);
 
     expect(result.threads).toEqual([]);
+  });
+
+  it('prefers a nested Copilot account for a phrase-based request over an outer Claude attribute', () => {
+    const result = extractTimeline(parse(`
+      <div class="TimelineItem" id="event-request-conflict" data-review-requested-login="claude">
+        Copilot AI review requested
+        <a href="/apps/copilot-pull-request-reviewer">Copilot</a>
+      </div>
+    `));
+
+    expect(result.artifacts.reviewRequests).toEqual([
+      {
+        action: 'requested',
+        id: 'event-request-conflict',
+        requestedLogin: 'copilot-pull-request-reviewer',
+      },
+    ]);
+  });
+
+  it('prefers a nested Copilot account for a phrase-based start event over an outer Claude attribute', () => {
+    const result = extractTimeline(parse(`
+      <div class="TimelineItem" id="event-start-conflict" data-login="claude">
+        <a href="/apps/copilot-pull-request-reviewer">Copilot</a>
+        started reviewing
+      </div>
+    `));
+
+    expect(result.artifacts.reviewEvents).toEqual([
+      {
+        action: 'started-reviewing',
+        actorLogin: 'copilot-pull-request-reviewer',
+        id: 'event-start-conflict',
+      },
+    ]);
   });
 
   it('marks malformed automated-comment JSON as partial without affecting thread completeness', () => {
