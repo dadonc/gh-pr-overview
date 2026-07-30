@@ -88,15 +88,54 @@ describe('content runtime', () => {
     expect(runtime.client.loadPullRequest).toHaveBeenCalledTimes(1);
   });
 
-  it('makes a queued location frame inert after invalidation cleanup', async () => {
+  it('uses the latest coalesced location event when it commits to a non-pulls route', async () => {
+    setupPage();
+    const runtime = startRuntime();
+    await Promise.resolve();
+
+    runtime.listeners.get('wxt:locationchange')!(locationChange('/octo/demo/pulls?q=reviewed'));
+    runtime.listeners.get('wxt:locationchange')!(locationChange('/octo/demo/issues'));
+    expect(runtime.frames).toHaveLength(1);
+
+    window.history.replaceState({}, '', '/octo/demo/issues');
+    runtime.frames.shift()!(0);
+
+    expect(runtime.signals[0]!.aborted).toBe(true);
+    expect(runtime.removes[0]).toHaveBeenCalledTimes(1);
+    expect(runtime.mount).toHaveBeenCalledTimes(1);
+    expect(runtime.client.loadPullRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reconcile a stale committed location after a newer coalesced event', async () => {
     setupPage();
     const runtime = startRuntime();
     await Promise.resolve();
 
     runtime.listeners.get('wxt:locationchange')!(locationChange('/octo/demo/issues'));
-    runtime.invalidate();
+    runtime.listeners.get('wxt:locationchange')!(locationChange('/octo/demo/pulls?q=reviewed'));
+    expect(runtime.frames).toHaveLength(1);
+
     window.history.replaceState({}, '', '/octo/demo/issues');
     runtime.frames.shift()!(0);
+
+    expect(runtime.signals[0]!.aborted).toBe(false);
+    expect(runtime.removes[0]).not.toHaveBeenCalled();
+    expect(runtime.mount).toHaveBeenCalledTimes(1);
+    expect(runtime.client.loadPullRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('makes a queued location frame inert after invalidation cleanup', async () => {
+    setupPage();
+    const runtime = startRuntime();
+    await Promise.resolve();
+
+    runtime.listeners.get('wxt:locationchange')!(locationChange('/octo/demo/pulls?q=reviewed'));
+    window.history.replaceState({}, '', '/octo/demo/pulls?q=reviewed');
+    runtime.invalidate();
+    runtime.frames.shift()!(0);
+
+    document.body.insertAdjacentHTML('beforeend', '<div id="issue_43" class="js-issue-row"><a href="/octo/demo/pull/43">Another PR</a><span class="opened-by"><a data-hovercard-type="user">author</a></span><a aria-label="1 comment" href="/octo/demo/pull/43#comments">1</a></div>');
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(runtime.signals[0]!.aborted).toBe(true);
     expect(runtime.removes[0]).toHaveBeenCalledTimes(1);
