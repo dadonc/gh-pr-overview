@@ -20,6 +20,10 @@ The overview stays on one line, with sections separated by `·`. When the
 available row is narrower than the summary, the card scrolls horizontally
 inside the pull-request row.
 
+Eligible pull-request rows start loading from the top of the list. Each row
+shows its independently complete diff data as soon as it is ready, while its
+review-thread and agent data continues loading.
+
 Total comments and review threads are independent metrics. Issue comments,
 review summaries, and other non-resolvable discussion still remain represented
 by GitHub's total comment count, but are not counted as review threads.
@@ -58,8 +62,10 @@ Automated fixtures cannot prove them:
 - Public and private PR lists render.
 - Exact and progressive diff totals are correct.
 - Deferred threads show exact thread totals and honest agent lower bounds.
-- Filtering, scrolling, Turbo navigation, dynamic rows, and route exit work.
-- Native counters restore after route exit and extension disable.
+- Scrolling starts eligible pending rows from the top of the list.
+- A completed diff section appears while review-thread and agent sections are still loading.
+- Filtering, Turbo navigation, dynamic rows, and route exit work.
+- Native counters restore after Turbo navigation, route exit, and extension disable.
 - No request leaves `github.com`.
 - Page and extension consoles contain no CSP/runtime errors.
 - Narrow viewport, keyboard focus, dark mode, and reduced motion remain usable.
