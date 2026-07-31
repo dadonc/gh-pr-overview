@@ -1,12 +1,13 @@
 # GitHub PR Overview
 
-GitHub PR Overview is a read-only Chrome extension that replaces the standalone
-comment counter on repository pull-request lists with a compact review summary.
-It runs on URLs matching `https://github.com/*/*/pulls*`.
+GitHub PR Overview is a read-only Chrome extension that adds a compact review
+summary to repository pull-request lists while preserving GitHub's native
+right-side comment counter. It runs on URLs matching
+`https://github.com/*/*/pulls*`.
 
 ## What it shows
 
-- GitHub's native total comment count as `X comments`.
+- GitHub's untouched native total-comment counter in its original position.
 - Active unresolved review threads as `X unresolved`. The extension still
   computes the complete thread totals and resolved-or-outdated breakdown
   internally.
@@ -16,13 +17,13 @@ It runs on URLs matching `https://github.com/*/*/pulls*`.
   has not responded.
 - A subtle marker for pull requests authored by the signed-in viewer.
 
-The overview stays on one line, with sections separated by `·`. When the
-available row is narrower than the summary, the card scrolls horizontally
-inside the pull-request row.
+The extension overview stays on one line, with its metrics separated by `·`.
+When the available row is narrower than the summary, the card scrolls
+horizontally inside the pull-request row.
 
 Total comments and review threads are independent metrics. Issue comments,
-review summaries, and other non-resolvable discussion still remain represented
-by GitHub's total comment count, but are not counted as review threads.
+review summaries, and other non-resolvable discussion remain represented by
+GitHub's native total comment count, but are not counted as review threads.
 
 ## Privacy and permissions
 

@@ -1,6 +1,6 @@
 {
   "name": "github-pr-overview",
-  "description": "Adds compact comment, review-thread, diff, and AI-agent summaries to GitHub pull request lists.",
+  "description": "Adds compact review-thread, diff, and AI-agent summaries alongside GitHub's native pull request comment counts.",
   "private": true,
   "version": "0.1.0",
   "type": "module",

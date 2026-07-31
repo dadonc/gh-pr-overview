@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import wxtConfig from '../wxt.config.ts';
 import { validateManifest, verifyManifest } from './verify-manifest.mjs';
 
 const expectedManifest = {
@@ -17,7 +18,7 @@ const expectedManifest = {
       world: 'ISOLATED',
     },
   ],
-  description: 'Adds compact comment, review-thread, diff, and AI-agent summaries to GitHub pull request lists.',
+  description: "Adds compact review-thread, diff, and AI-agent summaries alongside GitHub's native pull request comment counts.",
   icons: {
     16: 'icon/16.png',
     32: 'icon/32.png',
@@ -47,6 +48,15 @@ describe('validateManifest', () => {
 
   it('accepts the minimal generated MV3 manifest', () => {
     expect(validateManifest(expectedManifest)).toEqual([]);
+  });
+
+  it('keeps package and generated-manifest descriptions aligned', async () => {
+    const packageJson = JSON.parse(
+      await readFile(resolve('package.json'), 'utf8'),
+    );
+
+    expect(packageJson.description).toBe(expectedManifest.description);
+    expect(wxtConfig.manifest.description).toBe(expectedManifest.description);
   });
 
   it.each([
