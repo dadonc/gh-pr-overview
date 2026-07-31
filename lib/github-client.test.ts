@@ -242,6 +242,69 @@ describe('GitHub pull-request data pipeline', () => {
     expect(summary.reviewThreads.status).toBe('partial');
   });
 
+  it('uses GitHub request metadata only for timeline fragment fetches', async () => {
+    const fragmentUrl = 'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42';
+    const conversation = `<!doctype html>
+      <html>
+        <head>
+          <meta name="fetch-nonce" content="v2:test-fetch-nonce">
+          <meta name="release" content="0123456789abcdef0123456789abcdef01234567">
+        </head>
+        <body>
+          <div id="discussion_bucket"></div>
+          <div id="js-timeline-progressive-loader"
+               data-timeline-item-src="/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&amp;id=PR_current42"></div>
+        </body>
+      </html>`;
+    const fetcher = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) => {
+      const value = String(url);
+      if (value.endsWith('/files')) return response(diffAggregateHtml, value);
+      if (value === fragmentUrl) return response(currentTimelineFragmentHtml, value);
+      return response(conversation, value);
+    });
+
+    await clientFor(fetcher).loadPullRequest(identity);
+
+    const fragmentCall = fetcher.mock.calls.find(([url]) => String(url) === fragmentUrl);
+    expect(fragmentCall).toBeDefined();
+    const fragmentHeaders = new Headers(fragmentCall?.[1]?.headers);
+    expect(fragmentHeaders.get('X-Requested-With')).toBe('XMLHttpRequest');
+    expect(fragmentHeaders.get('X-Fetch-Nonce')).toBe('v2:test-fetch-nonce');
+    expect(fragmentHeaders.get('X-GitHub-Client-Version')).toBe(
+      '0123456789abcdef0123456789abcdef01234567',
+    );
+
+    for (const pageUrl of [
+      'https://github.com/octo/demo/pull/42',
+      'https://github.com/octo/demo/pull/42/files',
+    ]) {
+      const pageCall = fetcher.mock.calls.find(([url]) => String(url) === pageUrl);
+      expect(pageCall).toBeDefined();
+      expect([...new Headers(pageCall?.[1]?.headers)]).toEqual([]);
+    }
+  });
+
+  it('still marks a fragment request when optional GitHub metadata is absent', async () => {
+    const fragmentUrl = 'https://github.com/octo/demo/pull/42/timeline?after=next';
+    const conversation = `<div id="discussion_bucket"></div>
+      <div id="js-timeline-progressive-loader"
+           data-timeline-item-src="/octo/demo/pull/42/timeline?after=next"></div>`;
+    const fetcher = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) => {
+      const value = String(url);
+      if (value.endsWith('/files')) return response(diffAggregateHtml, value);
+      if (value === fragmentUrl) return response('<div id="discussion_bucket"></div>', value);
+      return response(conversation, value);
+    });
+
+    await clientFor(fetcher).loadPullRequest(identity);
+
+    const fragmentCall = fetcher.mock.calls.find(([url]) => String(url) === fragmentUrl);
+    expect(fragmentCall).toBeDefined();
+    expect(Object.fromEntries(new Headers(fragmentCall?.[1]?.headers))).toEqual({
+      'x-requested-with': 'XMLHttpRequest',
+    });
+  });
+
   it('summarizes the committed current fixture set with exact requests', async () => {
     const fixtureResponses = new Map([
       ['https://github.com/octo/demo/pull/42', currentConversationHtml],

@@ -249,6 +249,15 @@ function isAuthenticationDocument(document: Document): boolean {
   ));
 }
 
+function fragmentRequestHeaders(document: Document): Headers {
+  const headers = new Headers({ 'X-Requested-With': 'XMLHttpRequest' });
+  const fetchNonce = document.querySelector<HTMLMetaElement>('meta[name="fetch-nonce"]')?.content.trim();
+  const clientVersion = document.querySelector<HTMLMetaElement>('meta[name="release"]')?.content.trim();
+  if (fetchNonce) headers.set('X-Fetch-Nonce', fetchNonce);
+  if (clientVersion) headers.set('X-GitHub-Client-Version', clientVersion);
+  return headers;
+}
+
 export function createGitHubClient(options: GitHubClientOptions = {}) {
   const fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
   const clock = options.clock ?? Date.now;
@@ -270,16 +279,19 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
     identity: PullRequestIdentity,
     kind: PullRequestUrlKind,
     signal: AbortSignal | undefined,
+    headers?: HeadersInit,
   ): Promise<Document> => {
     if (!isAllowedPullRequestUrl(target, identity, kind)) throw new Error('GitHub URL was not allowed.');
     if (signal?.aborted) throw abortError();
     return limiter.run(signal, async () => {
-      const response = await fetcher(target, {
+      const request: RequestInit = {
         credentials: 'same-origin',
         method: 'GET',
         redirect: 'follow',
         signal,
-      });
+      };
+      if (headers) request.headers = headers;
+      const response = await fetcher(target, request);
       const finalUrl = response.url || target;
       if (!isAllowedPullRequestUrl(finalUrl, identity, kind)) throw new Error('GitHub redirected to an untrusted URL.');
       if (response.status === 401 || response.status === 403) throw new Error('GitHub access was denied.');
@@ -296,9 +308,13 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
     const signal = loadOptions?.signal;
     const conversationTarget = canonicalUrl(identity, 'conversation');
     const filesTarget = canonicalUrl(identity, 'files');
-    const settle = async (target: string, kind: PullRequestUrlKind): Promise<FetchResult> => {
+    const settle = async (
+      target: string,
+      kind: PullRequestUrlKind,
+      headers?: HeadersInit,
+    ): Promise<FetchResult> => {
       try {
-        return { document: await fetchDocument(target, identity, kind, signal), ok: true };
+        return { document: await fetchDocument(target, identity, kind, signal, headers), ok: true };
       } catch (error) {
         if (signal?.aborted || isAbort(error)) throw error;
         return { error: asError(error), ok: false };
@@ -329,6 +345,7 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
       }
 
       const timelineDocuments: Document[] = [conversation.document];
+      const fragmentHeaders = fragmentRequestHeaders(conversation.document);
       const fragmentReasons = new Set<string>();
       const addFragmentReason = (reason: string) => fragmentReasons.add(reason);
       let retryableFailure = false;
@@ -371,7 +388,7 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
         }
         if (batch.length === 0) continue;
         followed += batch.length;
-        const results = await Promise.all(batch.map(({ href }) => settle(href, 'fragment')));
+        const results = await Promise.all(batch.map(({ href }) => settle(href, 'fragment', fragmentHeaders)));
         for (const result of results) {
           if (!result.ok) {
             retryableFailure = true;
