@@ -13,7 +13,7 @@ function locationChange(url: string) {
   return Object.assign(new Event('wxt:locationchange'), { newUrl: new URL(url, document.location.href) });
 }
 
-function startRuntime() {
+function startRuntime(initiallyEnabled = true) {
   const listeners = new Map<string, EventListener>();
   const frames: FrameRequestCallback[] = [];
   let invalidate!: () => void;
@@ -30,7 +30,7 @@ function startRuntime() {
     removes.push(remove);
     return { isConnected: () => true, remove, update: vi.fn() };
   });
-  startContentRuntime({
+  const controller = startContentRuntime({
     ctx: {
       addEventListener(_target, type, listener) { listeners.set(type, listener as EventListener); },
       onInvalidated(listener) { invalidate = listener; return () => {}; },
@@ -38,12 +38,75 @@ function startRuntime() {
     },
     client,
     document,
+    initiallyEnabled,
     uiFactory: { mount },
   });
-  return { client, frames, invalidate, listeners, mount, removes, signals };
+  return { client, controller, frames, invalidate, listeners, mount, removes, signals };
 }
 
 describe('content runtime', () => {
+  it('starts dormant and activates without a reload', async () => {
+    setupPage();
+    const runtime = startRuntime(false);
+
+    expect(runtime.mount).not.toHaveBeenCalled();
+    expect(runtime.client.loadPullRequest).not.toHaveBeenCalled();
+
+    runtime.controller.setEnabled(true);
+    await Promise.resolve();
+
+    expect(runtime.mount).toHaveBeenCalledTimes(1);
+    expect(runtime.client.loadPullRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables immediately and creates one fresh reconciler when re-enabled', async () => {
+    setupPage();
+    const runtime = startRuntime();
+    await Promise.resolve();
+
+    runtime.controller.setEnabled(false);
+
+    expect(runtime.signals[0]!.aborted).toBe(true);
+    expect(runtime.removes[0]).toHaveBeenCalledTimes(1);
+
+    runtime.controller.setEnabled(false);
+    runtime.controller.setEnabled(true);
+    runtime.controller.setEnabled(true);
+    await Promise.resolve();
+
+    expect(runtime.mount).toHaveBeenCalledTimes(2);
+    expect(runtime.client.loadPullRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores navigation while disabled and enables against the current route', async () => {
+    setupPage();
+    const runtime = startRuntime(false);
+
+    runtime.listeners.get('wxt:locationchange')!(locationChange('/octo/demo/pulls?q=reviewed'));
+    window.history.replaceState({}, '', '/octo/demo/pulls?q=reviewed');
+    expect(runtime.frames).toHaveLength(0);
+    expect(runtime.mount).not.toHaveBeenCalled();
+
+    runtime.controller.setEnabled(true);
+    await Promise.resolve();
+    expect(runtime.mount).toHaveBeenCalledTimes(1);
+  });
+
+  it('makes activation and queued frames inert after invalidation', async () => {
+    setupPage();
+    const runtime = startRuntime();
+    runtime.listeners.get('wxt:locationchange')!(locationChange('/octo/demo/pulls?q=reviewed'));
+    await Promise.resolve();
+
+    runtime.invalidate();
+    runtime.controller.setEnabled(true);
+    window.history.replaceState({}, '', '/octo/demo/pulls?q=reviewed');
+    runtime.frames.shift()!(0);
+
+    expect(runtime.mount).toHaveBeenCalledTimes(1);
+    expect(runtime.removes[0]).toHaveBeenCalledTimes(1);
+  });
+
   it('waits for a location event URL to become committed before tearing down rows', async () => {
     setupPage();
     const runtime = startRuntime();
