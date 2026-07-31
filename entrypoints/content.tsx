@@ -2,6 +2,10 @@ import { createRoot, type Root } from 'react-dom/client';
 import { createShadowRootUi } from 'wxt/utils/content-script-ui/shadow-root';
 
 import { startContentRuntime } from '../lib/content-runtime';
+import {
+  enabledFromStorageChange,
+  readEnabled,
+} from '../lib/extension-toggle';
 import { createGitHubClient } from '../lib/github-client';
 import { CARD_STYLES, PullRequestCard } from '../lib/pr-card';
 
@@ -11,10 +15,31 @@ export default defineContentScript({
   runAt: 'document_idle',
   world: 'ISOLATED',
   async main(ctx) {
+    let invalidated = false;
+    let runtime: ReturnType<typeof startContentRuntime> | undefined;
+    let latestObservedEnabled: boolean | undefined;
+    const onStorageChanged = (
+      changes: Record<string, { newValue?: unknown; oldValue?: unknown }>,
+      areaName: string,
+    ) => {
+      const enabled = enabledFromStorageChange(changes, areaName);
+      if (enabled === undefined) return;
+      latestObservedEnabled = enabled;
+      runtime?.setEnabled(enabled);
+    };
+    browser.storage.onChanged.addListener(onStorageChanged);
+    ctx.onInvalidated(() => {
+      invalidated = true;
+      browser.storage.onChanged.removeListener(onStorageChanged);
+    });
+
+    const initiallyEnabled = await readEnabled(browser.storage.local);
+    if (invalidated) return;
     const client = createGitHubClient();
-    startContentRuntime({
+    runtime = startContentRuntime({
       ctx,
       client,
+      initiallyEnabled: latestObservedEnabled ?? initiallyEnabled,
       uiFactory: {
         async mount(anchor, props) {
           const ui = await createShadowRootUi<Root>(ctx, {
