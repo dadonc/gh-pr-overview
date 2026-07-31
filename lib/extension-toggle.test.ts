@@ -34,6 +34,24 @@ describe('extension toggle contract', () => {
     expect(storage.set).not.toHaveBeenCalled();
   });
 
+  it('defaults to enabled and warns when the preference cannot be read', async () => {
+    const error = new Error('storage unavailable');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const storage = {
+      get: vi.fn(async () => Promise.reject(error)),
+      set: vi.fn(),
+    };
+
+    await expect(readEnabled(storage)).resolves.toBe(true);
+    expect(storage.get).toHaveBeenCalledWith(ENABLED_STORAGE_KEY);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      'Unable to read extension enabled preference; defaulting to enabled.',
+    );
+
+    warn.mockRestore();
+  });
+
   it('writes exactly one boolean preference', async () => {
     const storage = { get: vi.fn(), set: vi.fn(async () => {}) };
 
