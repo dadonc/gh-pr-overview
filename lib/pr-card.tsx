@@ -57,14 +57,6 @@ function countLabel(count: number, singular: string, plural = `${singular}s`): s
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-function TotalComments({ section, fallbackHref }: { fallbackHref: string; section: PullRequestSummary['totalComments'] }) {
-  const descriptionId = useId();
-  if (section.status === 'loading') return <span className="metric comments" aria-label="Loading comments">Loading comments…</span>;
-  if (section.status === 'error') return <><span className="metric comments" title={section.message} aria-describedby={descriptionId}>— comments</span><Description id={descriptionId}>{section.message}</Description></>;
-  const partial = section.status === 'partial';
-  return <><a className="metric comments" href={section.data.href || fallbackHref} title={sectionTitle(section)} aria-describedby={partial ? descriptionId : undefined}>{section.data.count}{partial ? '+' : ''} {section.data.count === 1 ? 'comment' : 'comments'}</a>{partial && <Description id={descriptionId}>Lower-bound comments: {section.reason}</Description>}</>;
-}
-
 function ReviewThreads({ href, section }: { href: string; section: PullRequestSummary['reviewThreads'] }) {
   const descriptionId = useId();
   if (section.status === 'loading') return <span className="metric" aria-label="Loading unresolved review threads">Loading unresolved…</span>;
@@ -104,7 +96,6 @@ function Agents({ section }: { section: PullRequestSummary['agents'] }) {
 
 export function PullRequestCard({ conversationHref, filesHref, summary }: PullRequestCardProps) {
   const busy = [
-    summary.totalComments,
     summary.reviewThreads,
     summary.diff,
     summary.agents,
@@ -115,8 +106,6 @@ export function PullRequestCard({ conversationHref, filesHref, summary }: PullRe
       {busy ? 'Loading pull request overview.' : 'Pull request overview updated.'}
     </span>
     {summary.authoredByViewer && <span className="sr-only">Authored by you</span>}
-    <TotalComments section={summary.totalComments} fallbackHref={conversationHref} />
-    <Separator />
     <ReviewThreads section={summary.reviewThreads} href={conversationHref} />
     <Separator />
     <Diff section={summary.diff} href={filesHref} />
