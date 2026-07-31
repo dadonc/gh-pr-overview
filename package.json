@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "wxt",
     "dev:firefox": "wxt -b firefox",
+    "generate:icons": "node scripts/verify-disabled-icons.mjs --write",
     "build": "wxt build",
     "build:firefox": "wxt build -b firefox",
     "zip": "wxt zip",
@@ -15,9 +16,10 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
-    "verify": "npm run test:coverage && npm run compile && npm run build && npm run verify:manifest && npm run verify:bundle && npm run test:e2e",
+    "verify": "npm run test:coverage && npm run compile && npm run build && npm run verify:manifest && npm run verify:icons && npm run verify:bundle && npm run test:e2e",
     "test:watch": "vitest",
     "verify:bundle": "node scripts/verify-bundle.mjs",
+    "verify:icons": "node scripts/verify-disabled-icons.mjs",
     "verify:manifest": "node scripts/verify-manifest.mjs",
     "postinstall": "wxt prepare"
   },

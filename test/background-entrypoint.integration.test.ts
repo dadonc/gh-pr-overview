@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 
 const actionListeners: Array<() => void> = [];
+const startupListeners: Array<() => void> = [];
 const storageListeners: Array<
   (
     changes: Record<string, { newValue?: unknown; oldValue?: unknown }>,
@@ -17,6 +18,11 @@ const browserMock = {
     },
     setIcon: vi.fn(async () => {}),
     setTitle: vi.fn(async () => {}),
+  },
+  runtime: {
+    onStartup: {
+      addListener: vi.fn((listener: () => void) => startupListeners.push(listener)),
+    },
   },
   storage: {
     local: {
@@ -35,6 +41,7 @@ const browserMock = {
 
 afterEach(() => {
   actionListeners.length = 0;
+  startupListeners.length = 0;
   storageListeners.length = 0;
   storedEnabled = true;
   vi.clearAllMocks();
@@ -42,7 +49,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it('registers one popup-free action and synchronizes clicks and storage changes', async () => {
+it('registers one popup-free action and synchronizes clicks, startup, and storage changes', async () => {
   vi.stubGlobal('defineBackground', (value: typeof definition) => {
     definition = value;
     return value;
@@ -54,6 +61,7 @@ it('registers one popup-free action and synchronizes clicks and storage changes'
 
   expect(definition.type).toBe('module');
   expect(actionListeners).toHaveLength(1);
+  expect(startupListeners).toHaveLength(1);
   expect(storageListeners).toHaveLength(1);
   await vi.waitFor(() => {
     expect(browserMock.action.setTitle)
@@ -70,6 +78,22 @@ it('registers one popup-free action and synchronizes clicks and storage changes'
   await vi.waitFor(() => {
     expect(browserMock.action.setTitle)
       .toHaveBeenLastCalledWith({ title: 'Disable GitHub PR Overview' });
+  });
+
+  storedEnabled = false;
+  expect(startupListeners[0]!()).toBeUndefined();
+  await vi.waitFor(() => {
+    expect(browserMock.action.setIcon).toHaveBeenLastCalledWith({
+      path: {
+        16: 'icon/disabled/16.png',
+        32: 'icon/disabled/32.png',
+        48: 'icon/disabled/48.png',
+        96: 'icon/disabled/96.png',
+        128: 'icon/disabled/128.png',
+      },
+    });
+    expect(browserMock.action.setTitle)
+      .toHaveBeenLastCalledWith({ title: 'Enable GitHub PR Overview' });
   });
 });
 

@@ -20,6 +20,7 @@ export default defineBackground({
     };
 
     contain(controller.sync());
+    browser.runtime.onStartup.addListener(() => contain(controller.sync()));
     browser.action.onClicked.addListener(() => contain(controller.toggle()));
     browser.storage.onChanged.addListener((changes, areaName) => {
       const enabled = enabledFromStorageChange(changes, areaName);
