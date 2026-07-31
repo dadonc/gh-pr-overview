@@ -413,12 +413,6 @@ export function createPageReconciler(options: PageReconcilerOptions) {
       subtree: true,
     });
   };
-  const removeController = (row: HTMLElement, controller: RowController) => {
-    intersectionObserver?.unobserve(row);
-    scheduler.unregister(controller);
-    controller.dispose();
-    controllers.delete(row);
-  };
   const clear = () => {
     currentEpoch += 1;
     scheduler.clear();
@@ -443,17 +437,24 @@ export function createPageReconciler(options: PageReconcilerOptions) {
       return extraction ? [[row, extraction] as const] : [];
     }));
     const found = new Set(rows);
+    const staleControllers: Array<readonly [HTMLElement, RowController]> = [];
     for (const [row, controller] of controllers) {
       const extraction = row.isConnected ? extractions.get(row) : undefined;
       const nativeDirty = nativeDirtyRows.delete(row);
       const mountedUiDirty = mountedUiDirtyRows.delete(row);
       if (!found.has(row) || !extraction || !controller.matches(extraction)) {
-        removeController(row, controller);
+        staleControllers.push([row, controller]);
       } else {
         if (mountedUiDirty) controller.noteMountedUiRemoval();
         controller.refresh(extraction, nativeDirty);
       }
     }
+    for (const [row, controller] of staleControllers) {
+      intersectionObserver?.unobserve(row);
+      controller.dispose();
+      controllers.delete(row);
+    }
+    for (const [, controller] of staleControllers) scheduler.unregister(controller);
     for (const row of rows) {
       if (controllers.has(row)) continue;
       const extraction = extractions.get(row);

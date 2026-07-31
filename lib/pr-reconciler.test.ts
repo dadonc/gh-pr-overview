@@ -287,8 +287,40 @@ describe('page reconciler', () => {
     reconciler.cleanup();
   });
 
-  it('unregisters and aborts an active removed row before starting the next eligible row', async () => {
+  it('aborts an active removed row before starting the next eligible row', () => {
     const document = page([1, 2, 3].map((number) =>
+      row(number, `<a class="comments-link" aria-label="${number} comments" href="/octo/demo/pull/${number}#issuecomment-${number}">${number}</a>`),
+    ).join(''));
+    const signals = new Map<number, AbortSignal>();
+    const started: number[] = [];
+    let firstAbortedWhenThirdStarted: boolean | undefined;
+    const reconciler = createPageReconciler({
+      document,
+      client: {
+        loadPullRequest: vi.fn((identity, options) => {
+          if (identity.number === 3) firstAbortedWhenThirdStarted = signals.get(1)?.aborted;
+          started.push(identity.number);
+          signals.set(identity.number, options!.signal!);
+          return new Promise<PullRequestRemoteSummary>(() => {});
+        }),
+      },
+      IntersectionObserver: undefined,
+      uiFactory: { mount() { return { isConnected: () => true, remove: vi.fn(), update: vi.fn() }; } },
+    });
+
+    reconciler.reconcile();
+    expect(started).toEqual([1, 2]);
+    document.querySelector('#issue_1')!.remove();
+    reconciler.reconcile();
+
+    expect(signals.get(1)!.aborted).toBe(true);
+    expect(started).toEqual([1, 2, 3]);
+    expect(firstAbortedWhenThirdStarted).toBe(true);
+    reconciler.cleanup();
+  });
+
+  it('never starts a queued stale row while removing an active and queued stale batch', () => {
+    const document = page([1, 2, 3, 4].map((number) =>
       row(number, `<a class="comments-link" aria-label="${number} comments" href="/octo/demo/pull/${number}#issuecomment-${number}">${number}</a>`),
     ).join(''));
     const signals = new Map<number, AbortSignal>();
@@ -309,10 +341,12 @@ describe('page reconciler', () => {
     reconciler.reconcile();
     expect(started).toEqual([1, 2]);
     document.querySelector('#issue_1')!.remove();
+    document.querySelector('#issue_3')!.remove();
     reconciler.reconcile();
 
     expect(signals.get(1)!.aborted).toBe(true);
-    expect(started).toEqual([1, 2, 3]);
+    expect(signals.has(3)).toBe(false);
+    expect(started).toEqual([1, 2, 4]);
     reconciler.cleanup();
   });
 
