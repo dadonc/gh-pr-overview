@@ -253,8 +253,12 @@ it('renders the real content entrypoint and never mutates the native counter', a
   }).toEqual(nativeAttributes);
   expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual(expect.arrayContaining([...fixtures.keys()]));
   expect(fetcher).toHaveBeenCalledTimes(3);
-  for (const [, init] of fetcher.mock.calls) {
-    expect(init).toMatchObject({ credentials: 'same-origin', method: 'GET', redirect: 'follow' });
+  for (const [url, init] of fetcher.mock.calls) {
+    expect(init).toMatchObject({
+      credentials: 'same-origin',
+      method: 'GET',
+      redirect: String(url).includes('/timeline_focused_item?') ? 'error' : 'follow',
+    });
   }
 
   context.listeners.get('wxt:locationchange')!(Object.assign(new Event('wxt:locationchange'), {

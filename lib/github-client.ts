@@ -251,8 +251,8 @@ function isAuthenticationDocument(document: Document): boolean {
 
 function fragmentRequestHeaders(document: Document): Headers {
   const headers = new Headers({ 'X-Requested-With': 'XMLHttpRequest' });
-  const fetchNonce = document.querySelector<HTMLMetaElement>('meta[name="fetch-nonce"]')?.content.trim();
-  const clientVersion = document.querySelector<HTMLMetaElement>('meta[name="release"]')?.content.trim();
+  const fetchNonce = document.head?.querySelector<HTMLMetaElement>('meta[name="fetch-nonce"]')?.content.trim();
+  const clientVersion = document.head?.querySelector<HTMLMetaElement>('meta[name="release"]')?.content.trim();
   if (fetchNonce) headers.set('X-Fetch-Nonce', fetchNonce);
   if (clientVersion) headers.set('X-GitHub-Client-Version', clientVersion);
   return headers;
@@ -287,12 +287,13 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
       const request: RequestInit = {
         credentials: 'same-origin',
         method: 'GET',
-        redirect: 'follow',
+        redirect: kind === 'fragment' ? 'error' : 'follow',
         signal,
       };
       if (headers) request.headers = headers;
       const response = await fetcher(target, request);
       const finalUrl = response.url || target;
+      if (kind === 'fragment' && response.url !== target) throw new Error('GitHub redirected to an untrusted URL.');
       if (!isAllowedPullRequestUrl(finalUrl, identity, kind)) throw new Error('GitHub redirected to an untrusted URL.');
       if (response.status === 401 || response.status === 403) throw new Error('GitHub access was denied.');
       if (!response.ok) throw new Error(`GitHub request failed (${response.status}).`);
