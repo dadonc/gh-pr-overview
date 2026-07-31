@@ -333,6 +333,11 @@ describe('GitHub pull-request data pipeline', () => {
       'fragment',
     )).toBe(true);
     expect(isAllowedPullRequestUrl(
+      'octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&before_cursor=Cursor%2BZero&id=PR_current42',
+      identity,
+      'fragment',
+    )).toBe(true);
+    expect(isAllowedPullRequestUrl(
       '/octo/demo/pull/42/timeline?after=CaseSensitiveToken',
       identity,
       'fragment',
@@ -364,6 +369,8 @@ describe('GitHub pull-request data pipeline', () => {
       '/octo/demo/timeline_focused_item?after_cursor=cursor&id=not-a-pr-node',
       '/octo/demo/timeline_focused_item?id=PR_current42',
       '/octo/demo/timeline_focused_item?after_cursor=one&after_cursor=two&id=PR_current42',
+      '/octo/demo/timeline_focused_item?after_cursor=cursor&before_cursor=&id=PR_current42',
+      '/octo/demo/timeline_focused_item?after_cursor=cursor&before_cursor=one&before_cursor=two&id=PR_current42',
       '/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42&source=fragment',
       'https://user:secret@github.com/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
       'https://github.com:444/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
@@ -382,6 +389,27 @@ describe('GitHub pull-request data pipeline', () => {
     ]) {
       expect(isAllowedPullRequestUrl(candidate, identity, 'fragment')).toBe(false);
     }
+  });
+
+  it('follows a focused timeline fragment with an optional before cursor', async () => {
+    const fragmentUrl = 'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&before_cursor=Cursor%2BZero&id=PR_current42';
+    const conversation = `<div id="discussion_bucket"></div>
+      <div id="js-timeline-progressive-loader"
+           data-timeline-item-src="/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&amp;before_cursor=Cursor%2BZero&amp;id=PR_current42"></div>`;
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      const value = String(url);
+      if (value.endsWith('/files')) return response(diffAggregateHtml, value);
+      if (value === fragmentUrl) return response(currentTimelineFragmentHtml, value);
+      return response(conversation, value);
+    });
+
+    const summary = await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(fetcher).toHaveBeenCalledWith(
+      fragmentUrl,
+      expect.objectContaining({ credentials: 'same-origin', method: 'GET' }),
+    );
+    expect(summary.reviewThreads.status).toBe('ready');
   });
 
   it('follows the same-PR files redirect to changes and parses the diff', async () => {

@@ -134,11 +134,14 @@ function normalizeTimelineFragment(
   if (isFocused) {
     const ids = parameters.getAll('id');
     const cursors = parameters.getAll('after_cursor');
+    const beforeCursors = parameters.getAll('before_cursor');
     if (
-      parameters.size !== 2 ||
+      parameters.size !== 2 + beforeCursors.length ||
       ids.length !== 1 ||
       cursors.length !== 1 ||
       !cursors[0] ||
+      beforeCursors.length > 1 ||
+      (beforeCursors.length === 1 && !beforeCursors[0]) ||
       !/^PR_[A-Za-z0-9_-]+$/.test(ids[0] ?? '')
     ) return undefined;
     focusedPullRequestId = ids[0];
