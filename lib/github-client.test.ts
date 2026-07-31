@@ -615,6 +615,37 @@ describe('GitHub pull-request data pipeline', () => {
     });
   });
 
+  it('rejects a focused fragment response whose final URL is cross-origin', async () => {
+    const fragmentUrl = 'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42';
+    const conversation = `<div id="discussion_bucket"></div>
+      <div id="js-timeline-progressive-loader"
+           data-timeline-item-src="/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&amp;id=PR_current42"></div>`;
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      const value = String(url);
+      if (value.endsWith('/files')) return response(diffAggregateHtml, value);
+      if (value === fragmentUrl) {
+        return response(
+          currentTimelineFragmentHtml,
+          'https://evil.test/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42',
+        );
+      }
+      return response(conversation, value);
+    });
+
+    const result = await clientFor(fetcher).loadPullRequest(identity);
+
+    expect(result.reviewThreads).toMatchObject({
+      data: { resolvedOrOutdated: 0, total: 0, unresolved: 0 },
+      reason: expect.stringContaining('GitHub redirected to an untrusted URL.'),
+      status: 'partial',
+    });
+    expect(result.agents).toMatchObject({
+      data: [],
+      reason: expect.stringContaining('GitHub redirected to an untrusted URL.'),
+      status: 'partial',
+    });
+  });
+
   it('rejects a fragment response without a final URL', async () => {
     const fragmentUrl = 'https://github.com/octo/demo/pull/42/timeline?after=next';
     const conversation = `<div id="discussion_bucket"></div>
