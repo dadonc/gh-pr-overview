@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import currentPrListHtml from '../test/fixtures/github/current/pr-list.html?raw';
-import type { PullRequestLoadOptions, PullRequestRemoteSummary } from './github-client';
+import type {
+  PullRequestLoadOptions,
+  PullRequestRemoteSummary,
+  PullRequestRemoteUpdate,
+} from './github-client';
 import { createPageReconciler, isPullRequestListRoute, type CardProps, type MountedCard, type ObserverConstructor } from './pr-reconciler';
 
 const remote: PullRequestRemoteSummary = {
@@ -58,9 +62,16 @@ function createLifecycleCard(anchor: Element) {
 class FakeObserver {
   static instances: FakeObserver[] = [];
   readonly observe = vi.fn();
+  readonly unobserve = vi.fn();
   readonly disconnect = vi.fn();
-  constructor(readonly callback: (entries: IntersectionObserverEntry[]) => void) { FakeObserver.instances.push(this); }
+  constructor(
+    readonly callback: (entries: IntersectionObserverEntry[]) => void,
+    readonly options?: IntersectionObserverInit,
+  ) { FakeObserver.instances.push(this); }
   fire(target: Element, isIntersecting = true) { this.callback([{ isIntersecting, target } as IntersectionObserverEntry]); }
+  fireBatch(entries: Array<{ isIntersecting: boolean; target: Element }>) {
+    this.callback(entries as IntersectionObserverEntry[]);
+  }
 }
 
 const Observer = FakeObserver as unknown as ObserverConstructor;
@@ -83,6 +94,379 @@ describe('page reconciler', () => {
 
     expect(reconciler).toEqual(expect.objectContaining({ cleanup: expect.any(Function), reconcile: expect.any(Function) }));
     expect(reconciler).not.toHaveProperty('reset');
+    reconciler.cleanup();
+  });
+
+  it('loads one top-first eligibility batch with only two active rows', async () => {
+    const document = page([1, 2, 3].map((number) =>
+      row(number, `<a class="comments-link" aria-label="${number} comments" href="/octo/demo/pull/${number}#issuecomment-${number}">${number}</a>`),
+    ).join(''));
+    const completions = new Map<number, {
+      promise: Promise<PullRequestRemoteSummary>;
+      resolve(value: PullRequestRemoteSummary): void;
+    }>();
+    const started: number[] = [];
+    const client = {
+      loadPullRequest: vi.fn((identity: { number: number }) => {
+        let resolve!: (value: PullRequestRemoteSummary) => void;
+        const promise = new Promise<PullRequestRemoteSummary>((done) => { resolve = done; });
+        completions.set(identity.number, { promise, resolve });
+        started.push(identity.number);
+        return promise;
+      }),
+    };
+    const initialProps: CardProps[] = [];
+    const observerCount = FakeObserver.instances.length;
+    const reconciler = createPageReconciler({
+      document,
+      client,
+      IntersectionObserver: Observer,
+      uiFactory: {
+        mount(_anchor, props) {
+          initialProps.push(props);
+          return { isConnected: () => true, remove: vi.fn(), update: vi.fn() };
+        },
+      },
+    });
+
+    reconciler.reconcile();
+
+    expect(initialProps).toHaveLength(3);
+    expect(initialProps.every(({ summary }) =>
+      summary.diff.status === 'loading' &&
+      summary.reviewThreads.status === 'loading' &&
+      summary.agents.status === 'loading',
+    )).toBe(true);
+    expect(started).toEqual([]);
+    const observers = FakeObserver.instances.slice(observerCount);
+    expect(observers).toHaveLength(1);
+    expect(observers[0]!.options).toMatchObject({ rootMargin: '800px' });
+
+    const rows = [...document.querySelectorAll<HTMLElement>('[id^="issue_"].js-issue-row')];
+    observers[0]!.fireBatch([...rows].reverse().map((target) => ({ isIntersecting: true, target })));
+
+    expect(started).toEqual([1, 2]);
+
+    completions.get(2)!.resolve(remote);
+    await vi.waitFor(() => expect(started).toEqual([1, 2, 3]));
+
+    completions.get(1)!.resolve(remote);
+    completions.get(3)!.resolve(remote);
+    await Promise.resolve();
+    reconciler.cleanup();
+  });
+
+  it('reveals a lower-row diff without waiting for the higher row to complete', async () => {
+    const document = page([1, 2].map((number) =>
+      row(number, `<a class="comments-link" aria-label="${number} comments" href="/octo/demo/pull/${number}#issuecomment-${number}">${number}</a>`),
+    ).join(''));
+    const loadOptions = new Map<number, PullRequestLoadOptions>();
+    const latest = new Map<number, CardProps>();
+    const reconciler = createPageReconciler({
+      document,
+      client: {
+        loadPullRequest: vi.fn((identity, options) => {
+          loadOptions.set(identity.number, options!);
+          return new Promise<PullRequestRemoteSummary>(() => {});
+        }),
+      },
+      IntersectionObserver: undefined,
+      uiFactory: {
+        mount(anchor, props) {
+          const number = Number(anchor.closest<HTMLElement>('[id^="issue_"]')!.id.replace('issue_', ''));
+          latest.set(number, props);
+          return {
+            isConnected: () => true,
+            remove: vi.fn(),
+            update(next) { latest.set(number, next); },
+          };
+        },
+      },
+    });
+
+    reconciler.reconcile();
+    await Promise.resolve();
+    loadOptions.get(2)!.onUpdate!({ diff: remote.diff, kind: 'diff' });
+
+    expect(latest.get(1)!.summary.diff.status).toBe('loading');
+    expect(latest.get(2)!.summary.diff).toEqual(remote.diff);
+    expect(latest.get(2)!.summary.reviewThreads.status).toBe('loading');
+    expect(latest.get(2)!.summary.agents.status).toBe('loading');
+    reconciler.cleanup();
+  });
+
+  it('pauses queued rows that leave eligibility while active rows continue', async () => {
+    const document = page([1, 2, 3].map((number) =>
+      row(number, `<a class="comments-link" aria-label="${number} comments" href="/octo/demo/pull/${number}#issuecomment-${number}">${number}</a>`),
+    ).join(''));
+    const completions = new Map<number, ReturnType<typeof Promise.withResolvers<PullRequestRemoteSummary>>>();
+    const started: number[] = [];
+    const observerCount = FakeObserver.instances.length;
+    const reconciler = createPageReconciler({
+      document,
+      client: {
+        loadPullRequest: vi.fn((identity) => {
+          const completion = Promise.withResolvers<PullRequestRemoteSummary>();
+          completions.set(identity.number, completion);
+          started.push(identity.number);
+          return completion.promise;
+        }),
+      },
+      IntersectionObserver: Observer,
+      uiFactory: { mount() { return { isConnected: () => true, remove: vi.fn(), update: vi.fn() }; } },
+    });
+
+    reconciler.reconcile();
+    const rows = [...document.querySelectorAll<HTMLElement>('[id^="issue_"].js-issue-row')];
+    const observer = FakeObserver.instances[observerCount]!;
+    observer.fireBatch(rows.map((target) => ({ isIntersecting: true, target })));
+    observer.fireBatch([
+      { isIntersecting: false, target: rows[1]! },
+      { isIntersecting: false, target: rows[2]! },
+    ]);
+
+    completions.get(1)!.resolve(remote);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(started).toEqual([1, 2]);
+
+    observer.fireBatch([
+      { isIntersecting: true, target: rows[2]! },
+      { isIntersecting: true, target: rows[2]! },
+    ]);
+    expect(started).toEqual([1, 2, 3]);
+
+    completions.get(2)!.resolve(remote);
+    completions.get(3)!.resolve(remote);
+    reconciler.cleanup();
+  });
+
+  it('uses current document order for eligible inserted and reordered rows', async () => {
+    const document = page([1, 2, 3].map((number) =>
+      row(number, `<a class="comments-link" aria-label="${number} comments" href="/octo/demo/pull/${number}#issuecomment-${number}">${number}</a>`),
+    ).join(''));
+    const completions = new Map<number, ReturnType<typeof Promise.withResolvers<PullRequestRemoteSummary>>>();
+    const started: number[] = [];
+    const observerCount = FakeObserver.instances.length;
+    const reconciler = createPageReconciler({
+      document,
+      client: {
+        loadPullRequest: vi.fn((identity) => {
+          const completion = Promise.withResolvers<PullRequestRemoteSummary>();
+          completions.set(identity.number, completion);
+          started.push(identity.number);
+          return completion.promise;
+        }),
+      },
+      IntersectionObserver: Observer,
+      uiFactory: { mount() { return { isConnected: () => true, remove: vi.fn(), update: vi.fn() }; } },
+    });
+
+    reconciler.reconcile();
+    const observer = FakeObserver.instances[observerCount]!;
+    const initialRows = [...document.querySelectorAll<HTMLElement>('[id^="issue_"].js-issue-row')];
+    observer.fireBatch(initialRows.map((target) => ({ isIntersecting: true, target })));
+    expect(started).toEqual([1, 2]);
+
+    const container = document.createElement('div');
+    container.innerHTML = row(4, '<a class="comments-link" aria-label="4 comments" href="/octo/demo/pull/4#issuecomment-4">4</a>');
+    const inserted = container.firstElementChild as HTMLElement;
+    document.body.insertBefore(inserted, initialRows[2]!);
+    reconciler.reconcile();
+    observer.fire(inserted);
+    document.body.insertBefore(initialRows[2]!, inserted);
+    reconciler.reconcile();
+
+    completions.get(1)!.resolve(remote);
+    await vi.waitFor(() => expect(started).toEqual([1, 2, 3]));
+    completions.get(2)!.resolve(remote);
+    await vi.waitFor(() => expect(started).toEqual([1, 2, 3, 4]));
+
+    completions.get(3)!.resolve(remote);
+    completions.get(4)!.resolve(remote);
+    reconciler.cleanup();
+  });
+
+  it('unregisters and aborts an active removed row before starting the next eligible row', async () => {
+    const document = page([1, 2, 3].map((number) =>
+      row(number, `<a class="comments-link" aria-label="${number} comments" href="/octo/demo/pull/${number}#issuecomment-${number}">${number}</a>`),
+    ).join(''));
+    const signals = new Map<number, AbortSignal>();
+    const started: number[] = [];
+    const reconciler = createPageReconciler({
+      document,
+      client: {
+        loadPullRequest: vi.fn((identity, options) => {
+          started.push(identity.number);
+          signals.set(identity.number, options!.signal!);
+          return new Promise<PullRequestRemoteSummary>(() => {});
+        }),
+      },
+      IntersectionObserver: undefined,
+      uiFactory: { mount() { return { isConnected: () => true, remove: vi.fn(), update: vi.fn() }; } },
+    });
+
+    reconciler.reconcile();
+    expect(started).toEqual([1, 2]);
+    document.querySelector('#issue_1')!.remove();
+    reconciler.reconcile();
+
+    expect(signals.get(1)!.aborted).toBe(true);
+    expect(started).toEqual([1, 2, 3]);
+    reconciler.cleanup();
+  });
+
+  it('ignores every progressive update kind after its row is detached', () => {
+    const document = page(row());
+    let options!: PullRequestLoadOptions;
+    const updates: CardProps[] = [];
+    const reconciler = createPageReconciler({
+      document,
+      client: {
+        loadPullRequest: vi.fn((_identity, nextOptions) => {
+          options = nextOptions!;
+          return new Promise<PullRequestRemoteSummary>(() => {});
+        }),
+      },
+      IntersectionObserver: undefined,
+      uiFactory: {
+        mount(_anchor, props) {
+          updates.push(props);
+          return { isConnected: () => true, remove: vi.fn(), update(next) { updates.push(next); } };
+        },
+      },
+    });
+
+    reconciler.reconcile();
+    document.querySelector('#issue_42')!.remove();
+    reconciler.reconcile();
+    const countAfterDisposal = updates.length;
+    const staleUpdates: PullRequestRemoteUpdate[] = [
+      { diff: remote.diff, kind: 'diff' },
+      { agents: remote.agents, kind: 'timeline', reviewThreads: remote.reviewThreads },
+      { kind: 'complete', summary: remote },
+    ];
+    for (const update of staleUpdates) options.onUpdate!(update);
+
+    expect(options.signal!.aborted).toBe(true);
+    expect(updates).toHaveLength(countAfterDisposal);
+    reconciler.cleanup();
+  });
+
+  it('ignores progressive updates from a reused row identity and from a prior route epoch', async () => {
+    const document = page(row());
+    const loadOptions = new Map<number, PullRequestLoadOptions>();
+    const updates: CardProps[] = [];
+    const reconciler = createPageReconciler({
+      document,
+      client: {
+        loadPullRequest: vi.fn((identity, options) => {
+          loadOptions.set(identity.number, options!);
+          return new Promise<PullRequestRemoteSummary>(() => {});
+        }),
+      },
+      IntersectionObserver: undefined,
+      uiFactory: {
+        mount(_anchor, props) {
+          updates.push(props);
+          return { isConnected: () => true, remove: vi.fn(), update(next) { updates.push(next); } };
+        },
+      },
+    });
+
+    reconciler.reconcile();
+    document.querySelector<HTMLAnchorElement>('.Link--primary')!.href = '/octo/demo/pull/43';
+    document.querySelector<HTMLAnchorElement>('.comments-link')!.href = '/octo/demo/pull/43#issuecomment-43';
+    reconciler.reconcile();
+    loadOptions.get(42)!.onUpdate!({
+      diff: { data: { additions: 42, deletions: 1, filesChanged: 2 }, status: 'ready' },
+      kind: 'diff',
+    });
+
+    expect(loadOptions.get(42)!.signal!.aborted).toBe(true);
+    expect(updates.some((props) =>
+      props.conversationHref === '/octo/demo/pull/43' &&
+      'data' in props.summary.diff &&
+      props.summary.diff.data.additions === 42,
+    )).toBe(false);
+
+    window.history.replaceState({}, '', '/octo/demo/issues');
+    reconciler.reconcile();
+    const countAfterRouteExit = updates.length;
+    loadOptions.get(43)!.onUpdate!({ kind: 'complete', summary: remote });
+    await Promise.resolve();
+
+    expect(loadOptions.get(43)!.signal!.aborted).toBe(true);
+    expect(updates).toHaveLength(countAfterRouteExit);
+    reconciler.cleanup();
+  });
+
+  it('keeps an early ready diff when the remaining remote load rejects unexpectedly', async () => {
+    const document = page(row());
+    const updates: CardProps[] = [];
+    const reconciler = createPageReconciler({
+      document,
+      client: {
+        loadPullRequest: vi.fn((_identity, options) => {
+          options!.onUpdate!({ diff: remote.diff, kind: 'diff' });
+          return Promise.reject(new Error('timeline failed unexpectedly'));
+        }),
+      },
+      IntersectionObserver: undefined,
+      uiFactory: {
+        mount(_anchor, props) {
+          updates.push(props);
+          return { isConnected: () => true, remove: vi.fn(), update(next) { updates.push(next); } };
+        },
+      },
+    });
+
+    reconciler.reconcile();
+    await vi.waitFor(() => expect(updates.at(-1)!.summary.agents.status).toBe('error'));
+
+    expect(updates.at(-1)!.summary.diff).toEqual(remote.diff);
+    expect(updates.at(-1)!.summary.reviewThreads).toEqual({
+      message: 'timeline failed unexpectedly',
+      status: 'error',
+    });
+    reconciler.cleanup();
+  });
+
+  it('fills omitted progressive sections from completion without regressing settled sections to loading', async () => {
+    const document = page(row());
+    const timelineError = { message: 'timeline unavailable', status: 'error' } as const;
+    const updates: CardProps[] = [];
+    const reconciler = createPageReconciler({
+      document,
+      client: {
+        loadPullRequest: vi.fn(async (_identity, options): Promise<PullRequestRemoteSummary> => {
+          options!.onUpdate!({ diff: remote.diff, kind: 'diff' });
+          options!.onUpdate!({
+            agents: timelineError,
+            kind: 'timeline',
+            reviewThreads: timelineError,
+          });
+          return {
+            agents: { status: 'loading' },
+            diff: { status: 'loading' },
+            reviewThreads: { status: 'loading' },
+          };
+        }),
+      },
+      IntersectionObserver: undefined,
+      uiFactory: {
+        mount(_anchor, props) {
+          updates.push(props);
+          return { isConnected: () => true, remove: vi.fn(), update(next) { updates.push(next); } };
+        },
+      },
+    });
+
+    reconciler.reconcile();
+    await vi.waitFor(() => expect(updates.at(-1)!.summary.diff).toEqual(remote.diff));
+
+    expect(updates.at(-1)!.summary.agents).toEqual(timelineError);
+    expect(updates.at(-1)!.summary.reviewThreads).toEqual(timelineError);
     reconciler.cleanup();
   });
 

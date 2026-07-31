@@ -1,12 +1,17 @@
 import type { PullRequestSummary, SectionState, TotalComments } from './domain';
 import type { PullRequestIdentity } from './domain';
-import type { PullRequestLoadOptions, PullRequestRemoteSummary } from './github-client';
+import type {
+  PullRequestLoadOptions,
+  PullRequestRemoteSummary,
+  PullRequestRemoteUpdate,
+} from './github-client';
 import type { PullRequestRowExtraction } from './github-dom';
 import {
   extractPullRequestRow,
   findNativeCommentCounter,
   findPullRequestTitle,
 } from './github-dom';
+import { createPrLoadScheduler } from './pr-load-scheduler';
 
 export interface PullRequestClient {
   loadPullRequest(identity: PullRequestIdentity, options?: PullRequestLoadOptions): Promise<PullRequestRemoteSummary>;
@@ -85,8 +90,12 @@ function loadingSummary(extraction: PullRequestRowExtraction): PullRequestSummar
   };
 }
 
-function summaryWithRemote(extraction: PullRequestRowExtraction, remote: PullRequestRemoteSummary): PullRequestSummary {
-  return { ...loadingSummary(extraction), ...remote, totalComments: totalComments(extraction) };
+function mergeSection<T>(
+  current: SectionState<T>,
+  next: SectionState<T> | undefined,
+): SectionState<T> {
+  if (!next || (next.status === 'loading' && current.status !== 'loading')) return current;
+  return next;
 }
 
 function setAttributeExactly(element: Element, name: string, value: string | null): void {
@@ -101,7 +110,6 @@ class RowController {
   private mounted?: MountedCard;
   private nativeCounter?: NativeCounterState;
   private pendingProps: CardProps;
-  private intersectionObserver?: IntersectionObserver;
   private readonly authoredAttribute: string | null;
   private started = false;
   private disposed = false;
@@ -117,7 +125,6 @@ class RowController {
     private readonly ownEpoch: number,
     private readonly ignoreOwnedRemoval: (node: Node) => void,
     private readonly requestReconcile: () => void,
-    IntersectionObserverCtor: ObserverConstructor | undefined,
   ) {
     this.currentExtraction = extraction;
     this.authoredAttribute = row.getAttribute('data-pr-overview-authored');
@@ -145,18 +152,6 @@ class RowController {
       this.setAuthoredAttribute();
       mounted.update(this.pendingProps);
     }).catch(() => this.dispose());
-    if (IntersectionObserverCtor) {
-      const observer = new IntersectionObserverCtor((entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          observer.disconnect();
-          this.start();
-        }
-      }, { rootMargin: '800px' });
-      this.intersectionObserver = observer;
-      observer.observe(this.row);
-    } else {
-      this.start();
-    }
   }
 
   private createMountAnchor(): HTMLSpanElement {
@@ -274,7 +269,7 @@ class RowController {
     if (!this.mounted) this.pendingMountedUiRemoval = true;
   }
 
-  start(): void {
+  async start(): Promise<void> {
     if (this.started || this.disposed) return;
     this.started = true;
     const requestedIdentity = this.currentExtraction.identity;
@@ -287,29 +282,61 @@ class RowController {
         ? extraction
         : undefined;
     };
-    this.client.loadPullRequest(requestedIdentity, { signal: abortController.signal }).then((remote) => {
+    const mergeRemote = (remote: Partial<PullRequestRemoteSummary>) => {
       if (this.disposed || this.ownEpoch !== this.epoch() || abortController.signal.aborted) return;
       const extraction = matchingExtraction();
       if (!extraction) return;
       this.currentExtraction = extraction;
       this.adoptNativeCounter(extraction);
-      this.render(this.props(summaryWithRemote(extraction, remote)));
-    }).catch((error: unknown) => {
+      const current = this.pendingProps.summary;
+      this.render(this.props({
+        ...current,
+        agents: mergeSection(current.agents, remote.agents),
+        authoredByViewer: loadingSummary(extraction).authoredByViewer,
+        diff: mergeSection(current.diff, remote.diff),
+        reviewThreads: mergeSection(current.reviewThreads, remote.reviewThreads),
+        totalComments: totalComments(extraction),
+      }));
+    };
+    const mergeUpdate = (update: PullRequestRemoteUpdate) => {
+      if (update.kind === 'diff') mergeRemote({ diff: update.diff });
+      else if (update.kind === 'timeline') {
+        mergeRemote({ agents: update.agents, reviewThreads: update.reviewThreads });
+      } else {
+        mergeRemote(update.summary);
+      }
+    };
+    try {
+      const remote = await this.client.loadPullRequest(requestedIdentity, {
+        onUpdate: mergeUpdate,
+        signal: abortController.signal,
+      });
+      mergeRemote(remote);
+    } catch (error: unknown) {
       if (this.disposed || this.ownEpoch !== this.epoch() || abortController.signal.aborted) return;
       const extraction = matchingExtraction();
       if (!extraction) return;
       this.currentExtraction = extraction;
       this.adoptNativeCounter(extraction);
       const message = error instanceof Error ? error.message : 'GitHub data could not be loaded.';
-      this.render(this.props({ ...loadingSummary(extraction), agents: { message, status: 'error' }, diff: { message, status: 'error' }, reviewThreads: { message, status: 'error' } }));
-    });
+      const current = this.pendingProps.summary;
+      const errorSection = <T>(section: SectionState<T>): SectionState<T> =>
+        section.status === 'loading' ? { message, status: 'error' } : section;
+      this.render(this.props({
+        ...current,
+        agents: errorSection(current.agents),
+        authoredByViewer: loadingSummary(extraction).authoredByViewer,
+        diff: errorSection(current.diff),
+        reviewThreads: errorSection(current.reviewThreads),
+        totalComments: totalComments(extraction),
+      }));
+    }
   }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
     this.abortController?.abort();
-    this.intersectionObserver?.disconnect();
     this.mounted?.remove();
     this.restoreNativeCounter();
     if (this.mountAnchor.isConnected) this.ignoreOwnedRemoval(this.mountAnchor);
@@ -324,6 +351,7 @@ export function isPullRequestListRoute(url: Pick<Location, 'pathname'>): boolean
 
 export function createPageReconciler(options: PageReconcilerOptions) {
   const controllers = new Map<HTMLElement, RowController>();
+  const scheduler = createPrLoadScheduler<RowController>(2);
   const nativeDirtyRows = new Set<HTMLElement>();
   const mountedUiDirtyRows = new Set<HTMLElement>();
   const ignoredOwnedRemovals = new WeakSet<Node>();
@@ -331,6 +359,21 @@ export function createPageReconciler(options: PageReconcilerOptions) {
   let observer: MutationObserver | undefined;
   let queued = false;
   let stopped = false;
+  const orderedControllers = () =>
+    [...options.document.querySelectorAll<HTMLElement>('[id^="issue_"].js-issue-row')]
+      .flatMap((row) => {
+        const controller = controllers.get(row);
+        return controller ? [controller] : [];
+      });
+  const intersectionObserver = options.IntersectionObserver
+    ? new options.IntersectionObserver((entries) => {
+        scheduler.setOrder(orderedControllers());
+        scheduler.updateEligibility(entries.flatMap((entry) => {
+          const controller = controllers.get(entry.target as HTMLElement);
+          return controller ? [{ eligible: entry.isIntersecting, job: controller }] : [];
+        }));
+      }, { rootMargin: '800px' })
+    : undefined;
   const queueReconcile = () => {
     if (queued || stopped) return;
     queued = true;
@@ -370,9 +413,19 @@ export function createPageReconciler(options: PageReconcilerOptions) {
       subtree: true,
     });
   };
+  const removeController = (row: HTMLElement, controller: RowController) => {
+    intersectionObserver?.unobserve(row);
+    scheduler.unregister(controller);
+    controller.dispose();
+    controllers.delete(row);
+  };
   const clear = () => {
     currentEpoch += 1;
-    for (const controller of controllers.values()) controller.dispose();
+    scheduler.clear();
+    for (const [row, controller] of controllers) {
+      intersectionObserver?.unobserve(row);
+      controller.dispose();
+    }
     controllers.clear();
     nativeDirtyRows.clear();
     mountedUiDirtyRows.clear();
@@ -395,8 +448,7 @@ export function createPageReconciler(options: PageReconcilerOptions) {
       const nativeDirty = nativeDirtyRows.delete(row);
       const mountedUiDirty = mountedUiDirtyRows.delete(row);
       if (!found.has(row) || !extraction || !controller.matches(extraction)) {
-        controller.dispose();
-        controllers.delete(row);
+        removeController(row, controller);
       } else {
         if (mountedUiDirty) controller.noteMountedUiRemoval();
         controller.refresh(extraction, nativeDirty);
@@ -406,7 +458,7 @@ export function createPageReconciler(options: PageReconcilerOptions) {
       if (controllers.has(row)) continue;
       const extraction = extractions.get(row);
       if (!extraction) continue;
-      controllers.set(row, new RowController(
+      const controller = new RowController(
         options.document,
         row,
         extraction,
@@ -416,14 +468,27 @@ export function createPageReconciler(options: PageReconcilerOptions) {
         currentEpoch,
         (node) => ignoredOwnedRemovals.add(node),
         queueReconcile,
-        options.IntersectionObserver,
-      ));
+      );
+      controllers.set(row, controller);
+      scheduler.register(controller, () => controller.start());
+      intersectionObserver?.observe(row);
+    }
+    const order = orderedControllers();
+    scheduler.setOrder(order);
+    if (!intersectionObserver) {
+      scheduler.updateEligibility(order.map((job) => ({ eligible: true, job })));
     }
     nativeDirtyRows.clear();
     mountedUiDirtyRows.clear();
   };
   return {
-    cleanup() { stopped = true; observer?.disconnect(); observer = undefined; clear(); },
+    cleanup() {
+      stopped = true;
+      observer?.disconnect();
+      observer = undefined;
+      intersectionObserver?.disconnect();
+      clear();
+    },
     reconcile,
   };
 }

@@ -28,6 +28,7 @@ interface ShadowRootUiOptions {
 const wxtBoundary = vi.hoisted(() => ({
   options: undefined as ShadowRootUiOptions | undefined,
 }));
+const pendingInvalidations: Array<() => void> = [];
 
 vi.mock('wxt/utils/content-script-ui/shadow-root', () => ({
   async createShadowRootUi(ctx: FakeContext, options: ShadowRootUiOptions) {
@@ -88,8 +89,33 @@ function renderedOverviewLine(): string | undefined {
     .join(' ');
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, reject, resolve };
+}
+
+async function loadContentEntrypoint(fetcher: typeof fetch): Promise<void> {
+  vi.stubGlobal('defineContentScript', (value: typeof definition) => {
+    definition = value;
+    return value;
+  });
+  vi.stubGlobal('fetch', fetcher);
+  vi.resetModules();
+  await import('../entrypoints/content');
+}
+
 afterEach(() => {
+  act(() => {
+    for (const invalidate of pendingInvalidations.splice(0)) invalidate();
+  });
   wxtBoundary.options = undefined;
+  vi.doUnmock('../lib/github-client');
+  vi.resetModules();
   vi.unstubAllGlobals();
 });
 
@@ -115,12 +141,7 @@ it('renders the real content entrypoint with fixture-backed data and restores th
     requestAnimationFrame(callback) { frames.push(callback); return frames.length; },
   };
 
-  vi.stubGlobal('defineContentScript', (value: typeof definition) => {
-    definition = value;
-    return value;
-  });
-  vi.stubGlobal('fetch', fetcher);
-  await import('../entrypoints/content');
+  await loadContentEntrypoint(fetcher);
 
   await definition.main(context);
 
@@ -153,4 +174,115 @@ it('renders the real content entrypoint with fixture-backed data and restores th
   expect(nativeCounter.hidden).toBe(false);
   expect(nativeCounter).not.toHaveAttribute('aria-hidden');
   expect(nativeCounter).not.toHaveAttribute('tabindex');
+});
+
+it('renders the completed diff before timeline loading finishes', async () => {
+  currentPullRequestRow();
+  const files = deferred<Response>();
+  const conversation = deferred<Response>();
+  const fetcher = vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === 'https://github.com/octo/demo/pull/42/files') return files.promise;
+    if (url === 'https://github.com/octo/demo/pull/42') return conversation.promise;
+    if (url === 'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42') {
+      return Promise.resolve(response(currentTimelineFragmentHtml, url));
+    }
+    throw new Error(`Unexpected fixture request: ${url}`);
+  });
+  const context: FakeContext = {
+    addEventListener() {},
+    onInvalidated(listener) { pendingInvalidations.push(listener); return () => {}; },
+    requestAnimationFrame() { return 1; },
+  };
+
+  await loadContentEntrypoint(fetcher as typeof fetch);
+  await definition.main(context);
+
+  await waitFor(() => {
+    expect(fetcher).toHaveBeenCalledWith('https://github.com/octo/demo/pull/42/files', expect.anything());
+    expect(fetcher).toHaveBeenCalledWith('https://github.com/octo/demo/pull/42', expect.anything());
+  });
+
+  await act(async () => {
+    files.resolve(response(currentFilesHtml, 'https://github.com/octo/demo/pull/42/files'));
+  });
+
+  await waitFor(() => {
+    expect(renderedOverviewLine()).toBe('2 comments · Loading unresolved… · −353/+524 · 18 files · Loading agents…');
+  });
+
+  await act(async () => {
+    conversation.resolve(response(currentConversationHtml, 'https://github.com/octo/demo/pull/42'));
+  });
+  await waitFor(() => {
+    expect(renderedOverviewLine()).toBe('2 comments · 0 unresolved · −353/+524 · 18 files · Copilot 1');
+  });
+});
+
+it('keeps only two active real entrypoint rows until either completes', async () => {
+  const fixture = new DOMParser().parseFromString(currentPrListHtml, 'text/html');
+  const third = fixture.querySelector<HTMLElement>('#issue_42')!.cloneNode(true) as HTMLElement;
+  third.id = 'issue_44';
+  for (const link of third.querySelectorAll<HTMLAnchorElement>('a[href]')) {
+    link.href = link.getAttribute('href')!.replaceAll('/42', '/44');
+  }
+  document.head.innerHTML = fixture.head.innerHTML;
+  document.body.replaceChildren(
+    fixture.querySelector<HTMLElement>('#issue_42')!,
+    fixture.querySelector<HTMLElement>('#issue_43')!,
+    third,
+  );
+  window.history.replaceState({}, '', '/octo/demo/pulls');
+
+  const completions = new Map<number, ReturnType<typeof deferred<{
+    agents: { data: []; status: 'ready' };
+    diff: { data: { additions: number; deletions: number; filesChanged: number }; status: 'ready' };
+    reviewThreads: { data: { resolvedOrOutdated: number; total: number; unresolved: number }; status: 'ready' };
+  }>>>();
+  const loadPullRequest = vi.fn((identity: { number: number }) => {
+    const completion = deferred<{
+      agents: { data: []; status: 'ready' };
+      diff: { data: { additions: number; deletions: number; filesChanged: number }; status: 'ready' };
+      reviewThreads: { data: { resolvedOrOutdated: number; total: number; unresolved: number }; status: 'ready' };
+    }>();
+    completions.set(identity.number, completion);
+    return completion.promise;
+  });
+  vi.doMock('../lib/github-client', () => ({
+    createGitHubClient: () => ({ loadPullRequest }),
+  }));
+  const context: FakeContext = {
+    addEventListener() {},
+    onInvalidated(listener) { pendingInvalidations.push(listener); return () => {}; },
+    requestAnimationFrame() { return 1; },
+  };
+
+  await loadContentEntrypoint(vi.fn() as unknown as typeof fetch);
+  await definition.main(context);
+
+  await waitFor(() => {
+    expect(loadPullRequest.mock.calls.map(([identity]) => identity.number)).toEqual([42, 43]);
+  });
+
+  await act(async () => {
+    completions.get(43)!.resolve({
+      agents: { data: [], status: 'ready' },
+      diff: { data: { additions: 43, deletions: 1, filesChanged: 2 }, status: 'ready' },
+      reviewThreads: { data: { resolvedOrOutdated: 0, total: 0, unresolved: 0 }, status: 'ready' },
+    });
+  });
+
+  await waitFor(() => {
+    expect(loadPullRequest.mock.calls.map(([identity]) => identity.number)).toEqual([42, 43, 44]);
+  });
+
+  await act(async () => {
+    for (const number of [42, 44]) {
+      completions.get(number)!.resolve({
+        agents: { data: [], status: 'ready' },
+        diff: { data: { additions: number, deletions: 1, filesChanged: 2 }, status: 'ready' },
+        reviewThreads: { data: { resolvedOrOutdated: 0, total: 0, unresolved: 0 }, status: 'ready' },
+      });
+    }
+  });
 });
