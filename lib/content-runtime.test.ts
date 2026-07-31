@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { PullRequestRemoteSummary } from './github-client';
+import type { PullRequestLoadOptions, PullRequestRemoteSummary } from './github-client';
 import { startContentRuntime } from './content-runtime';
 
 function setupPage(url = '/octo/demo/pulls') {
@@ -20,8 +20,8 @@ function startRuntime() {
   const signals: AbortSignal[] = [];
   const removes: ReturnType<typeof vi.fn>[] = [];
   const client = {
-    loadPullRequest: vi.fn((_identity, signal?: AbortSignal): Promise<PullRequestRemoteSummary> => {
-      if (signal) signals.push(signal);
+    loadPullRequest: vi.fn((_identity, options?: PullRequestLoadOptions): Promise<PullRequestRemoteSummary> => {
+      if (options?.signal) signals.push(options.signal);
       return new Promise(() => {});
     }),
   };

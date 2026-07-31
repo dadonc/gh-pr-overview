@@ -1,6 +1,6 @@
 import type { PullRequestSummary, SectionState, TotalComments } from './domain';
 import type { PullRequestIdentity } from './domain';
-import type { PullRequestRemoteSummary } from './github-client';
+import type { PullRequestLoadOptions, PullRequestRemoteSummary } from './github-client';
 import type { PullRequestRowExtraction } from './github-dom';
 import {
   extractPullRequestRow,
@@ -9,7 +9,7 @@ import {
 } from './github-dom';
 
 export interface PullRequestClient {
-  loadPullRequest(identity: PullRequestIdentity, signal?: AbortSignal): Promise<PullRequestRemoteSummary>;
+  loadPullRequest(identity: PullRequestIdentity, options?: PullRequestLoadOptions): Promise<PullRequestRemoteSummary>;
 }
 
 export interface CardProps {
@@ -287,7 +287,7 @@ class RowController {
         ? extraction
         : undefined;
     };
-    this.client.loadPullRequest(requestedIdentity, abortController.signal).then((remote) => {
+    this.client.loadPullRequest(requestedIdentity, { signal: abortController.signal }).then((remote) => {
       if (this.disposed || this.ownEpoch !== this.epoch() || abortController.signal.aborted) return;
       const extraction = matchingExtraction();
       if (!extraction) return;

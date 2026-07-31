@@ -14,6 +14,7 @@ import {
   createGitHubClient,
   isValidPullRequestIdentity,
   isAllowedPullRequestUrl,
+  type PullRequestRemoteUpdate,
 } from './github-client';
 import { extractPullRequestRows } from './github-dom';
 
@@ -28,13 +29,19 @@ const response = (html: string, url = 'https://github.com/octo/demo/pull/42') =>
   url,
 }) as Response;
 
-const failed = (status = 500) => ({
+const failed = (status = 500, url = 'https://github.com/octo/demo/pull/42') => ({
   headers: new Headers({ 'content-type': 'text/html' }),
   ok: false,
   status,
   text: async () => '',
-  url: 'https://github.com/octo/demo/pull/42',
+  url,
 }) as Response;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
+}
 
 function clientFor(
   fetcher: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
@@ -49,6 +56,192 @@ function clientFor(
 }
 
 describe('GitHub pull-request data pipeline', () => {
+  it('publishes the final diff while the conversation request remains unresolved', async () => {
+    const conversation = deferred<Response>();
+    const files = deferred<Response>();
+    const updates: unknown[] = [];
+    const fetcher = vi.fn((url: RequestInfo | URL) =>
+      String(url).endsWith('/files') ? files.promise : conversation.promise,
+    );
+    const client = clientFor(fetcher);
+    const pending = client.loadPullRequest(identity, { onUpdate: (update) => updates.push(update) });
+
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    files.resolve(response(diffAggregateHtml, 'https://github.com/octo/demo/pull/42/files'));
+
+    await vi.waitFor(() => expect(updates).toEqual([{
+      diff: { data: { additions: 1204, deletions: 56, filesChanged: 3 }, status: 'ready' },
+      kind: 'diff',
+    }]));
+
+    conversation.resolve(response('<div id="discussion_bucket"></div>'));
+    await pending;
+  });
+
+  it('starts a conversation fragment without waiting for the files request', async () => {
+    const files = deferred<Response>();
+    const fragmentStarted = deferred<void>();
+    const updates: PullRequestRemoteUpdate[] = [];
+    const conversation = '<div id="discussion_bucket"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=next"></div>';
+    const fetcher = vi.fn((url: RequestInfo | URL) => {
+      const value = String(url);
+      if (value.endsWith('/files')) return files.promise;
+      if (value.includes('/timeline?after=next')) {
+        fragmentStarted.resolve();
+        return Promise.resolve(response('<div id="discussion_bucket"></div>', value));
+      }
+      return Promise.resolve(response(conversation, value));
+    });
+    const client = clientFor(fetcher);
+    const pending = client.loadPullRequest(identity, { onUpdate: (update) => updates.push(update) });
+
+    await expect(Promise.race([
+      fragmentStarted.promise,
+      new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error('Timeline fragment did not start before files resolved.')), 100)),
+    ])).resolves.toBeUndefined();
+
+    files.resolve(response(diffAggregateHtml, 'https://github.com/octo/demo/pull/42/files'));
+    await pending;
+
+    expect(updates.filter((update) => update.kind === 'timeline')).toEqual([{
+      agents: { data: [], status: 'ready' },
+      kind: 'timeline',
+      reviewThreads: { data: { resolvedOrOutdated: 0, total: 0, unresolved: 0 }, status: 'ready' },
+    }]);
+  });
+
+  it('keeps the complete update observer from undermining the cached summary', async () => {
+    let updateAttempts = 0;
+    const fetcher = vi.fn(async (url: RequestInfo | URL) =>
+      response(String(url).endsWith('/files') ? diffAggregateHtml : '<div id="discussion_bucket"></div>', String(url)),
+    );
+    const client = clientFor(fetcher);
+    const onUpdate = () => {
+      updateAttempts += 1;
+      throw new Error('Observer failed.');
+    };
+
+    const first = await client.loadPullRequest(identity, { onUpdate });
+    const second = await client.loadPullRequest(identity, { onUpdate });
+
+    expect(second).toBe(first);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(updateAttempts).toBe(3);
+  });
+
+  it('publishes one complete update for cached and invalid identities', async () => {
+    const fetcher = vi.fn(async (url: RequestInfo | URL) =>
+      response(String(url).endsWith('/files') ? diffAggregateHtml : '<div id="discussion_bucket"></div>', String(url)),
+    );
+    const client = clientFor(fetcher);
+    const summary = await client.loadPullRequest(identity);
+    const cachedUpdates: PullRequestRemoteUpdate[] = [];
+
+    expect(await client.loadPullRequest(identity, { onUpdate: (update) => cachedUpdates.push(update) })).toBe(summary);
+    expect(cachedUpdates).toEqual([{ kind: 'complete', summary }]);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+
+    const invalidUpdates: PullRequestRemoteUpdate[] = [];
+    const invalidSummary = await client.loadPullRequest({ number: 0, owner: 'octo', repository: 'demo' }, {
+      onUpdate: (update) => invalidUpdates.push(update),
+    });
+
+    expect(invalidUpdates).toEqual([{ kind: 'complete', summary: invalidSummary }]);
+    expect(invalidSummary).toEqual({
+      agents: { message: 'Pull request identity is invalid.', status: 'error' },
+      diff: { message: 'Pull request identity is invalid.', status: 'error' },
+      reviewThreads: { message: 'Pull request identity is invalid.', status: 'error' },
+    });
+  });
+
+  it('publishes no update after its caller aborts before the responses settle', async () => {
+    const controller = new AbortController();
+    const resolvers = new Map<string, (value: Response) => void>();
+    const updates: PullRequestRemoteUpdate[] = [];
+    const fetcher = vi.fn((url: RequestInfo | URL) => new Promise<Response>((resolve) => {
+      resolvers.set(String(url), resolve);
+    }));
+    const client = clientFor(fetcher);
+    const pending = client.loadPullRequest(identity, {
+      onUpdate: (update) => updates.push(update),
+      signal: controller.signal,
+    });
+
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    controller.abort();
+    resolvers.get('https://github.com/octo/demo/pull/42')?.(response('<div id="discussion_bucket"></div>'));
+    resolvers.get('https://github.com/octo/demo/pull/42/files')?.(response(diffAggregateHtml, 'https://github.com/octo/demo/pull/42/files'));
+    await pending;
+
+    expect(updates).toEqual([]);
+  });
+
+  it('publishes a file failure only in its final diff update', async () => {
+    const updates: PullRequestRemoteUpdate[] = [];
+    const fetcher = vi.fn(async (url: RequestInfo | URL) =>
+      String(url).endsWith('/files') ? failed(500, String(url)) : response('<div id="discussion_bucket"></div>', String(url)),
+    );
+
+    const summary = await clientFor(fetcher).loadPullRequest(identity, { onUpdate: (update) => updates.push(update) });
+
+    expect(updates.find((update) => update.kind === 'diff')).toEqual({
+      diff: { message: 'GitHub request failed (500).', status: 'error' },
+      kind: 'diff',
+    });
+    expect(updates.find((update) => update.kind === 'timeline')).toEqual({
+      agents: { data: [], status: 'ready' },
+      kind: 'timeline',
+      reviewThreads: { data: { resolvedOrOutdated: 0, total: 0, unresolved: 0 }, status: 'ready' },
+    });
+    expect(summary.diff.status).toBe('error');
+    expect(summary.agents.status).toBe('ready');
+    expect(summary.reviewThreads.status).toBe('ready');
+  });
+
+  it('publishes a conversation failure only in its final timeline update', async () => {
+    const updates: PullRequestRemoteUpdate[] = [];
+    const fetcher = vi.fn(async (url: RequestInfo | URL) =>
+      String(url).endsWith('/files') ? response(diffAggregateHtml, String(url)) : failed(),
+    );
+
+    const summary = await clientFor(fetcher).loadPullRequest(identity, { onUpdate: (update) => updates.push(update) });
+
+    expect(updates.find((update) => update.kind === 'diff')).toEqual({
+      diff: { data: { additions: 1204, deletions: 56, filesChanged: 3 }, status: 'ready' },
+      kind: 'diff',
+    });
+    expect(updates.find((update) => update.kind === 'timeline')).toEqual({
+      agents: { message: 'GitHub request failed (500).', status: 'error' },
+      kind: 'timeline',
+      reviewThreads: { message: 'GitHub request failed (500).', status: 'error' },
+    });
+    expect(summary.diff.status).toBe('ready');
+    expect(summary.agents.status).toBe('error');
+    expect(summary.reviewThreads.status).toBe('error');
+  });
+
+  it('publishes a partial final timeline update when a fragment fails', async () => {
+    const updates: PullRequestRemoteUpdate[] = [];
+    const conversation = '<div id="discussion_bucket"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=retry"></div>';
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      const value = String(url);
+      if (value.endsWith('/files')) return response(diffAggregateHtml, value);
+      return value.includes('after=retry') ? failed() : response(conversation, value);
+    });
+
+    const summary = await clientFor(fetcher).loadPullRequest(identity, { onUpdate: (update) => updates.push(update) });
+    const timeline = updates.find((update) => update.kind === 'timeline');
+
+    expect(timeline).toMatchObject({
+      agents: { status: 'partial' },
+      kind: 'timeline',
+      reviewThreads: { status: 'partial' },
+    });
+    expect(summary.diff.status).toBe('ready');
+    expect(summary.agents.status).toBe('partial');
+    expect(summary.reviewThreads.status).toBe('partial');
+  });
+
   it('summarizes the committed current fixture set with exact requests', async () => {
     const fixtureResponses = new Map([
       ['https://github.com/octo/demo/pull/42', currentConversationHtml],
@@ -353,7 +546,7 @@ describe('GitHub pull-request data pipeline', () => {
       return response(timelineHtml, 'https://evil.test/octo/demo/pull/42');
     });
 
-    const result = await clientFor(fetcher).loadPullRequest(identity, signal);
+    const result = await clientFor(fetcher).loadPullRequest(identity, { signal });
 
     expect(fetcher).toHaveBeenCalled();
     expect(result.reviewThreads.status).toBe('error');
@@ -654,7 +847,7 @@ describe('GitHub pull-request data pipeline', () => {
     const blockedClient = clientFor(fetcher, { limiter });
     const first = blockedClient.loadPullRequest(identity);
     const controller = new AbortController();
-    const second = blockedClient.loadPullRequest({ ...identity, number: 43 }, controller.signal);
+    const second = blockedClient.loadPullRequest({ ...identity, number: 43 }, { signal: controller.signal });
     controller.abort();
     release();
 
@@ -673,7 +866,7 @@ describe('GitHub pull-request data pipeline', () => {
       });
     });
     const client = clientFor(fetcher);
-    const pending = client.loadPullRequest(identity, controller.signal);
+    const pending = client.loadPullRequest(identity, { signal: controller.signal });
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
@@ -713,20 +906,20 @@ describe('GitHub pull-request data pipeline', () => {
   it('does not cache a completed load when its caller aborts before the responses settle', async () => {
     const controller = new AbortController();
     let delayed = true;
-    const resolvers: Array<(value: Response) => void> = [];
+    const resolvers = new Map<string, (value: Response) => void>();
     const noFragments = '<div id="discussion_bucket"></div>';
     const fetcher = vi.fn((url: RequestInfo | URL) => {
       const value = String(url);
       if (!delayed) return Promise.resolve(response(value.endsWith('/files') ? diffAggregateHtml : noFragments, value));
-      return new Promise<Response>((resolve) => resolvers.push(resolve));
+      return new Promise<Response>((resolve) => resolvers.set(value, resolve));
     });
     const client = clientFor(fetcher);
-    const pending = client.loadPullRequest(identity, controller.signal);
+    const pending = client.loadPullRequest(identity, { signal: controller.signal });
 
     await Promise.resolve();
     controller.abort();
-    resolvers[0]?.(response(noFragments, 'https://github.com/octo/demo/pull/42'));
-    resolvers[1]?.(response(diffAggregateHtml, 'https://github.com/octo/demo/pull/42/files'));
+    resolvers.get('https://github.com/octo/demo/pull/42')?.(response(noFragments, 'https://github.com/octo/demo/pull/42'));
+    resolvers.get('https://github.com/octo/demo/pull/42/files')?.(response(diffAggregateHtml, 'https://github.com/octo/demo/pull/42/files'));
     await pending;
     delayed = false;
     await client.loadPullRequest(identity);

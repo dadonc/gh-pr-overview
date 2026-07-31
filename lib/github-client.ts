@@ -32,6 +32,20 @@ export interface PullRequestRemoteSummary {
   reviewThreads: SectionState<ReviewThreadCounts>;
 }
 
+export type PullRequestRemoteUpdate =
+  | { kind: 'diff'; diff: PullRequestRemoteSummary['diff'] }
+  | {
+      kind: 'timeline';
+      agents: PullRequestRemoteSummary['agents'];
+      reviewThreads: PullRequestRemoteSummary['reviewThreads'];
+    }
+  | { kind: 'complete'; summary: PullRequestRemoteSummary };
+
+export interface PullRequestLoadOptions {
+  onUpdate?: (update: PullRequestRemoteUpdate) => void;
+  signal?: AbortSignal;
+}
+
 export type PullRequestUrlKind = 'conversation' | 'files' | 'fragment';
 
 export interface FetchLimiter {
@@ -65,6 +79,17 @@ type FetchResult = FetchFailure | FetchSuccess;
 interface LoadOutcome {
   retryableFailure: boolean;
   summary: PullRequestRemoteSummary;
+}
+
+interface DiffLoadOutcome {
+  diff: PullRequestRemoteSummary['diff'];
+  retryableFailure: boolean;
+}
+
+interface TimelineLoadOutcome {
+  agents: PullRequestRemoteSummary['agents'];
+  retryableFailure: boolean;
+  reviewThreads: PullRequestRemoteSummary['reviewThreads'];
 }
 
 interface NormalizedTimelineFragment {
@@ -228,6 +253,15 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
   const limiter = options.limiter ?? sharedLimiter;
   const cache = new Map<string, CachedSummary>();
 
+  const publish = (loadOptions: PullRequestLoadOptions | undefined, update: PullRequestRemoteUpdate) => {
+    if (loadOptions?.signal?.aborted || !loadOptions?.onUpdate) return;
+    try {
+      loadOptions.onUpdate(update);
+    } catch {
+      // Updates are best-effort observers; loading and caching remain authoritative.
+    }
+  };
+
   const fetchDocument = async (
     target: string,
     identity: PullRequestIdentity,
@@ -255,7 +289,8 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
     });
   };
 
-  const loadUncached = async (identity: PullRequestIdentity, signal?: AbortSignal): Promise<LoadOutcome> => {
+  const loadUncached = async (identity: PullRequestIdentity, loadOptions?: PullRequestLoadOptions): Promise<LoadOutcome> => {
+    const signal = loadOptions?.signal;
     const conversationTarget = canonicalUrl(identity, 'conversation');
     const filesTarget = canonicalUrl(identity, 'files');
     const settle = async (target: string, kind: PullRequestUrlKind): Promise<FetchResult> => {
@@ -267,137 +302,154 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
       }
     };
 
-    const [conversation, files] = await Promise.all([
-      settle(conversationTarget, 'conversation'),
-      settle(filesTarget, 'files'),
-    ]);
+    const diffPromise = settle(filesTarget, 'files').then((files): DiffLoadOutcome => {
+      const diff: PullRequestRemoteSummary['diff'] = !files.ok
+        ? { message: files.error.message, status: 'error' }
+        : (() => {
+            const extracted = extractDiffSummary(files.document);
+            return sectionFromCompleteness(extracted.data, extracted.completeness.isComplete, extracted.completeness.reasons);
+          })();
+      publish(loadOptions, { diff, kind: 'diff' });
+      return { diff, retryableFailure: !files.ok };
+    });
 
-    const diff = !files.ok
-      ? { message: files.error.message, status: 'error' as const }
-      : (() => {
-          const extracted = extractDiffSummary(files.document);
-          return sectionFromCompleteness(extracted.data, extracted.completeness.isComplete, extracted.completeness.reasons);
-        })();
-
-    if (!conversation.ok) {
-      const message = conversation.error.message;
-      return {
-        retryableFailure: true,
-        summary: {
+    const timelinePromise = settle(conversationTarget, 'conversation').then(async (conversation): Promise<TimelineLoadOutcome> => {
+      if (!conversation.ok) {
+        const message = conversation.error.message;
+        const outcome: TimelineLoadOutcome = {
           agents: { message, status: 'error' },
-          diff,
+          retryableFailure: true,
           reviewThreads: { message, status: 'error' },
-        },
-      };
-    }
-
-    const timelineDocuments: Document[] = [conversation.document];
-    const fragmentReasons = new Set<string>();
-    const addFragmentReason = (reason: string) => fragmentReasons.add(reason);
-    let retryableFailure = !files.ok;
-    if (!hasRecognizableTimelineEvidence(conversation.document)) addFragmentReason('GitHub did not expose recognizable timeline evidence.');
-
-    let pinnedFocusedPullRequestId: string | undefined;
-    const queuedFragments: NormalizedTimelineFragment[] = [];
-    const addFragment = (candidate: string, isConversationLoader = false) => {
-      const fragment = normalizeTimelineFragment(candidate, identity);
-      if (!fragment) {
-        addFragmentReason('GitHub exposed an invalid timeline fragment.');
-        return;
+        };
+        publish(loadOptions, { agents: outcome.agents, kind: 'timeline', reviewThreads: outcome.reviewThreads });
+        return outcome;
       }
-      if (fragment.focusedPullRequestId) {
-        if (isConversationLoader && pinnedFocusedPullRequestId === undefined) {
-          pinnedFocusedPullRequestId = fragment.focusedPullRequestId;
-        } else if (pinnedFocusedPullRequestId !== fragment.focusedPullRequestId) {
+
+      const timelineDocuments: Document[] = [conversation.document];
+      const fragmentReasons = new Set<string>();
+      const addFragmentReason = (reason: string) => fragmentReasons.add(reason);
+      let retryableFailure = false;
+      if (!hasRecognizableTimelineEvidence(conversation.document)) addFragmentReason('GitHub did not expose recognizable timeline evidence.');
+
+      let pinnedFocusedPullRequestId: string | undefined;
+      const queuedFragments: NormalizedTimelineFragment[] = [];
+      const addFragment = (candidate: string, isConversationLoader = false) => {
+        const fragment = normalizeTimelineFragment(candidate, identity);
+        if (!fragment) {
           addFragmentReason('GitHub exposed an invalid timeline fragment.');
           return;
         }
-      }
-      queuedFragments.push(fragment);
-    };
-    for (const fragment of extractTimeline(conversation.document, identity).nextTimelineFragments) {
-      addFragment(fragment, true);
-    }
-    const seenFragments = new Set<string>();
-    let followed = 0;
-    while (queuedFragments.length > 0) {
-      if (followed >= MAX_TIMELINE_FRAGMENTS) {
-        addFragmentReason('GitHub exposed more than 20 timeline fragments.');
-        break;
-      }
-      const batch: NormalizedTimelineFragment[] = [];
-      while (queuedFragments.length > 0 && batch.length + followed < MAX_TIMELINE_FRAGMENTS && batch.length < 4) {
-        const fragment = queuedFragments.shift()!;
-        if (seenFragments.has(fragment.dedupeKey)) continue;
-        seenFragments.add(fragment.dedupeKey);
-        batch.push(fragment);
-      }
-      if (batch.length === 0) continue;
-      followed += batch.length;
-      const results = await Promise.all(batch.map(({ href }) => settle(href, 'fragment')));
-      for (const result of results) {
-        if (!result.ok) {
-          retryableFailure = true;
-          addFragmentReason(`A timeline fragment could not be loaded: ${result.error.message}`);
-          continue;
+        if (fragment.focusedPullRequestId) {
+          if (isConversationLoader && pinnedFocusedPullRequestId === undefined) {
+            pinnedFocusedPullRequestId = fragment.focusedPullRequestId;
+          } else if (pinnedFocusedPullRequestId !== fragment.focusedPullRequestId) {
+            addFragmentReason('GitHub exposed an invalid timeline fragment.');
+            return;
+          }
         }
-        timelineDocuments.push(result.document);
-        if (!hasRecognizableTimelineEvidence(result.document)) addFragmentReason('A timeline fragment had no recognizable review data.');
-        for (const fragment of extractTimeline(result.document, identity).nextTimelineFragments) {
-          addFragment(fragment);
+        queuedFragments.push(fragment);
+      };
+      for (const fragment of extractTimeline(conversation.document, identity).nextTimelineFragments) {
+        addFragment(fragment, true);
+      }
+      const seenFragments = new Set<string>();
+      let followed = 0;
+      while (queuedFragments.length > 0) {
+        if (followed >= MAX_TIMELINE_FRAGMENTS) {
+          addFragmentReason('GitHub exposed more than 20 timeline fragments.');
+          break;
+        }
+        const batch: NormalizedTimelineFragment[] = [];
+        while (queuedFragments.length > 0 && batch.length + followed < MAX_TIMELINE_FRAGMENTS && batch.length < 4) {
+          const fragment = queuedFragments.shift()!;
+          if (seenFragments.has(fragment.dedupeKey)) continue;
+          seenFragments.add(fragment.dedupeKey);
+          batch.push(fragment);
+        }
+        if (batch.length === 0) continue;
+        followed += batch.length;
+        const results = await Promise.all(batch.map(({ href }) => settle(href, 'fragment')));
+        for (const result of results) {
+          if (!result.ok) {
+            retryableFailure = true;
+            addFragmentReason(`A timeline fragment could not be loaded: ${result.error.message}`);
+            continue;
+          }
+          timelineDocuments.push(result.document);
+          if (!hasRecognizableTimelineEvidence(result.document)) addFragmentReason('A timeline fragment had no recognizable review data.');
+          for (const fragment of extractTimeline(result.document, identity).nextTimelineFragments) {
+            addFragment(fragment);
+          }
         }
       }
-    }
 
-    const timeline = extractTimeline(timelineDocuments, identity);
-    const agentReasons = new Set([
-      ...fragmentReasons,
-      ...timeline.completeness.agents.reasons,
-    ]);
-    const threadReasons = new Set([
-      ...fragmentReasons,
-      ...timeline.completeness.reviewThreads.reasons,
-    ]);
-    const threadData = classifyReviewThreads(timeline.threads);
-    const agentData = aggregateAgentParticipation({
-      comments: timeline.artifacts.comments,
-      inlineComments: timeline.artifacts.inlineComments,
-      reactions: timeline.artifacts.reactions,
-      reviewEvents: timeline.artifacts.reviewEvents,
-      reviewRequests: timeline.artifacts.currentReviewRequests,
-      reviews: timeline.artifacts.reviews,
-      threadReplies: timeline.artifacts.threadReplies,
+      const timeline = extractTimeline(timelineDocuments, identity);
+      const agentReasons = new Set([
+        ...fragmentReasons,
+        ...timeline.completeness.agents.reasons,
+      ]);
+      const threadReasons = new Set([
+        ...fragmentReasons,
+        ...timeline.completeness.reviewThreads.reasons,
+      ]);
+      const threadData = classifyReviewThreads(timeline.threads);
+      const agentData = aggregateAgentParticipation({
+        comments: timeline.artifacts.comments,
+        inlineComments: timeline.artifacts.inlineComments,
+        reactions: timeline.artifacts.reactions,
+        reviewEvents: timeline.artifacts.reviewEvents,
+        reviewRequests: timeline.artifacts.currentReviewRequests,
+        reviews: timeline.artifacts.reviews,
+        threadReplies: timeline.artifacts.threadReplies,
+      });
+      const outcome: TimelineLoadOutcome = {
+        agents: sectionFromCompleteness(agentData, agentReasons.size === 0, [...agentReasons]),
+        retryableFailure,
+        reviewThreads: sectionFromCompleteness(threadData, threadReasons.size === 0, [...threadReasons]),
+      };
+      publish(loadOptions, { agents: outcome.agents, kind: 'timeline', reviewThreads: outcome.reviewThreads });
+      return outcome;
     });
 
+    const [diff, timeline] = await Promise.all([diffPromise, timelinePromise]);
     return {
-      retryableFailure,
+      retryableFailure: diff.retryableFailure || timeline.retryableFailure,
       summary: {
-        agents: sectionFromCompleteness(agentData, agentReasons.size === 0, [...agentReasons]),
-        diff,
-        reviewThreads: sectionFromCompleteness(threadData, threadReasons.size === 0, [...threadReasons]),
+        agents: timeline.agents,
+        diff: diff.diff,
+        reviewThreads: timeline.reviewThreads,
       },
     };
   };
 
-  return {
-    async loadPullRequest(identity: PullRequestIdentity, signal?: AbortSignal): Promise<PullRequestRemoteSummary> {
-      if (signal?.aborted) throw abortError();
-      if (!isValidPullRequestIdentity(identity)) {
-        const message = 'Pull request identity is invalid.';
-        return {
-          agents: { message, status: 'error' },
-          diff: { message, status: 'error' },
-          reviewThreads: { message, status: 'error' },
-        };
-      }
-      const key = cacheKey(identity);
-      const cached = cache.get(key);
-      if (cached && cached.expiresAt > clock()) return cached.summary;
-      if (cached) cache.delete(key);
+  async function loadPullRequest(
+    identity: PullRequestIdentity,
+    loadOptions?: PullRequestLoadOptions,
+  ): Promise<PullRequestRemoteSummary> {
+    const signal = loadOptions?.signal;
+    if (signal?.aborted) throw abortError();
+    if (!isValidPullRequestIdentity(identity)) {
+      const message = 'Pull request identity is invalid.';
+      const summary: PullRequestRemoteSummary = {
+        agents: { message, status: 'error' },
+        diff: { message, status: 'error' },
+        reviewThreads: { message, status: 'error' },
+      };
+      publish(loadOptions, { kind: 'complete', summary });
+      return summary;
+    }
+    const key = cacheKey(identity);
+    const cached = cache.get(key);
+    if (cached && cached.expiresAt > clock()) {
+      publish(loadOptions, { kind: 'complete', summary: cached.summary });
+      return cached.summary;
+    }
+    if (cached) cache.delete(key);
 
-      const loaded = await loadUncached(identity, signal);
-      if (!loaded.retryableFailure && !signal?.aborted) cache.set(key, { expiresAt: clock() + CACHE_TTL_MS, summary: loaded.summary });
-      return loaded.summary;
-    },
-  };
+    const loaded = await loadUncached(identity, loadOptions);
+    if (!loaded.retryableFailure && !signal?.aborted) cache.set(key, { expiresAt: clock() + CACHE_TTL_MS, summary: loaded.summary });
+    return loaded.summary;
+  }
+
+  return { loadPullRequest };
 }

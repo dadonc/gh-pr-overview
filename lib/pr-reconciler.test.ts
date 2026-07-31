@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import currentPrListHtml from '../test/fixtures/github/current/pr-list.html?raw';
-import type { PullRequestRemoteSummary } from './github-client';
+import type { PullRequestLoadOptions, PullRequestRemoteSummary } from './github-client';
 import { createPageReconciler, isPullRequestListRoute, type CardProps, type MountedCard, type ObserverConstructor } from './pr-reconciler';
 
 const remote: PullRequestRemoteSummary = {
@@ -1406,7 +1406,7 @@ describe('page reconciler', () => {
   it('automatically remounts a reused row after GitHub changes its pull href and updates native labels', async () => {
     const document = page(row());
     const calls: AbortSignal[] = [];
-    const client = { loadPullRequest: vi.fn((_identity, signal?: AbortSignal) => { calls.push(signal!); return new Promise<PullRequestRemoteSummary>(() => {}); }) };
+    const client = { loadPullRequest: vi.fn((_identity, options?: PullRequestLoadOptions) => { calls.push(options!.signal!); return new Promise<PullRequestRemoteSummary>(() => {}); }) };
     const updates: any[] = [];
     const reconciler = createPageReconciler({ document, client, IntersectionObserver: undefined, uiFactory: { mount(_anchor, props) { updates.push(props); return { isConnected: () => true, remove: vi.fn(), update(next) { updates.push(next); } }; } } });
     reconciler.reconcile();
@@ -1432,8 +1432,8 @@ describe('page reconciler', () => {
     let resolve42!: (value: PullRequestRemoteSummary) => void;
     const signals: AbortSignal[] = [];
     const client = {
-      loadPullRequest: vi.fn((identity: { number: number }, signal?: AbortSignal) => {
-        signals.push(signal!);
+      loadPullRequest: vi.fn((identity: { number: number }, options?: PullRequestLoadOptions) => {
+        signals.push(options!.signal!);
         if (identity.number === 42) return new Promise<PullRequestRemoteSummary>((resolve) => { resolve42 = resolve; });
         return Promise.resolve(remote43);
       }),
