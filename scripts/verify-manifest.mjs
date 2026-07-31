@@ -10,12 +10,16 @@ const EXPECTED_ICONS = {
   96: 'icon/96.png',
   128: 'icon/128.png',
 };
+const ACTION_FIELDS = new Set(['default_icon']);
 const ALLOWED_FIELDS = new Set([
+  'action',
+  'background',
   'content_scripts',
   'description',
   'icons',
   'manifest_version',
   'name',
+  'permissions',
   'version',
 ]);
 const CONTENT_SCRIPT_FIELDS = new Set([
@@ -59,6 +63,48 @@ export function validateManifest(manifest) {
     Object.entries(EXPECTED_ICONS).some(([size, path]) => manifest.icons[size] !== path)
   ) {
     errors.push('Manifest icons must be the packaged 16, 32, 48, 96, and 128px PNGs');
+  }
+
+  if (!isPlainObject(manifest.action)) {
+    errors.push('Manifest action must be a plain object');
+  } else {
+    for (const field of Object.keys(manifest.action).sort()) {
+      if (!ACTION_FIELDS.has(field)) errors.push(`Unexpected action field: ${field}`);
+    }
+    if (
+      !isPlainObject(manifest.action.default_icon) ||
+      !equals(
+        Object.keys(manifest.action.default_icon)
+          .sort((left, right) => Number(left) - Number(right)),
+        Object.keys(EXPECTED_ICONS),
+      ) ||
+      Object.entries(EXPECTED_ICONS)
+        .some(([size, path]) => manifest.action.default_icon[size] !== path)
+    ) {
+      errors.push(
+        'Action icons must be the packaged 16, 32, 48, 96, and 128px PNGs',
+      );
+    }
+  }
+
+  if (!isPlainObject(manifest.background)) {
+    errors.push('Manifest background must be a plain object');
+  } else {
+    for (const field of Object.keys(manifest.background).sort()) {
+      if (!['service_worker', 'type'].includes(field)) {
+        errors.push(`Unexpected background field: ${field}`);
+      }
+    }
+    if (manifest.background.service_worker !== 'background.js') {
+      errors.push('Background service worker must be background.js');
+    }
+    if (manifest.background.type !== 'module') {
+      errors.push('Background service worker type must be module');
+    }
+  }
+
+  if (!equals(manifest.permissions, ['storage'])) {
+    errors.push('Manifest permissions must be exactly storage');
   }
 
   const contentScripts = Array.isArray(manifest.content_scripts) ? manifest.content_scripts : [];

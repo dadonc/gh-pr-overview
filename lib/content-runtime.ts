@@ -15,27 +15,45 @@ export interface ContentScriptLifecycle {
   requestAnimationFrame(callback: FrameRequestCallback): number;
 }
 
+export interface ContentRuntimeController {
+  setEnabled(enabled: boolean): void;
+}
+
 export interface ContentRuntimeOptions {
   ctx: ContentScriptLifecycle;
   client: PullRequestClient;
   document?: Document;
+  initiallyEnabled?: boolean;
   IntersectionObserver?: ObserverConstructor;
   uiFactory: CardUiFactory;
 }
 
 /** Binds the testable page reconciler to WXT's Turbo-navigation lifecycle. */
-export function startContentRuntime(options: ContentRuntimeOptions) {
+export function startContentRuntime(options: ContentRuntimeOptions): ContentRuntimeController {
   const document = options.document ?? globalThis.document;
-  const reconciler = createPageReconciler({
-    document,
-    client: options.client,
-    IntersectionObserver: options.IntersectionObserver ?? globalThis.IntersectionObserver as ObserverConstructor | undefined,
-    uiFactory: options.uiFactory,
-  });
-  reconciler.reconcile();
+  let reconciler: ReturnType<typeof createPageReconciler> | undefined;
+  let invalidated = false;
+
+  const setEnabled = (enabled: boolean) => {
+    if (invalidated) return;
+    if (!enabled) {
+      reconciler?.cleanup();
+      reconciler = undefined;
+      return;
+    }
+    if (reconciler) return;
+    reconciler = createPageReconciler({
+      document,
+      client: options.client,
+      IntersectionObserver: options.IntersectionObserver ?? globalThis.IntersectionObserver as ObserverConstructor | undefined,
+      uiFactory: options.uiFactory,
+    });
+    reconciler.reconcile();
+  };
+
+  setEnabled(options.initiallyEnabled ?? true);
   let pendingUrl: URL | undefined;
   let framePending = false;
-  let invalidated = false;
   const scheduleCommittedReconcile = (newUrl: URL) => {
     pendingUrl = newUrl;
     if (framePending) return;
@@ -43,10 +61,16 @@ export function startContentRuntime(options: ContentRuntimeOptions) {
     options.ctx.requestAnimationFrame(() => {
       framePending = false;
       const expected = pendingUrl;
-      if (!invalidated && expected && document.location.href === expected.href) reconciler.reconcile();
+      if (!invalidated && expected && document.location.href === expected.href) reconciler?.reconcile();
     });
   };
-  options.ctx.addEventListener(window, 'wxt:locationchange', (event) => scheduleCommittedReconcile(event.newUrl));
-  options.ctx.onInvalidated(() => { invalidated = true; reconciler.cleanup(); });
-  return reconciler;
+  options.ctx.addEventListener(window, 'wxt:locationchange', (event) => {
+    if (reconciler) scheduleCommittedReconcile(event.newUrl);
+  });
+  options.ctx.onInvalidated(() => {
+    invalidated = true;
+    reconciler?.cleanup();
+    reconciler = undefined;
+  });
+  return { setEnabled };
 }

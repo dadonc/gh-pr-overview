@@ -38,8 +38,10 @@ interface ExtensionHarness {
   expectNoFailures(): Promise<void>;
   installHostilePageCss(): Promise<void>;
   nativeCounterSnapshotsAtHostConnection(): Promise<NativeCounterSnapshot[]>;
+  openPage(): Promise<Page>;
   page: Page;
   recordNativeCounterAtHostConnection(): Promise<void>;
+  setEnabled(enabled: boolean): Promise<void>;
   urls: typeof urls;
 }
 
@@ -93,6 +95,8 @@ export const test = base.extend<{ extension: ExtensionHarness }>({
       ],
       bypassCSP: false,
     });
+    const worker = context.serviceWorkers()[0] ??
+      await context.waitForEvent('serviceworker');
 
     try {
       await context.route('https://github.com/**', async (route) => {
@@ -128,26 +132,30 @@ export const test = base.extend<{ extension: ExtensionHarness }>({
         }
       });
 
-      const page = await context.newPage();
-      page.on('pageerror', (error) => {
-        diagnostics.pageErrors.push(error.message);
-        noteActivity();
-      });
-      page.on('console', (message) => {
-        if (message.type() === 'error') {
-          diagnostics.consoleErrors.push(messageForConsole(message.type(), message.text()));
+      async function configurePage(page: Page): Promise<Page> {
+        page.on('pageerror', (error) => {
+          diagnostics.pageErrors.push(error.message);
           noteActivity();
-        }
-      });
-      page.on('requestfailed', (request) => {
-        diagnostics.requestFailures.push(`${request.method()} ${request.url()} ${request.failure()?.errorText ?? ''}`.trim());
-        noteActivity();
-      });
-      await page.addInitScript(() => {
-        const removeUnservedFixtureRows = () => document.querySelector('#issue_43')?.remove();
-        new MutationObserver(removeUnservedFixtureRows).observe(document, { childList: true, subtree: true });
-        removeUnservedFixtureRows();
-      });
+        });
+        page.on('console', (message) => {
+          if (message.type() === 'error') {
+            diagnostics.consoleErrors.push(messageForConsole(message.type(), message.text()));
+            noteActivity();
+          }
+        });
+        page.on('requestfailed', (request) => {
+          diagnostics.requestFailures.push(`${request.method()} ${request.url()} ${request.failure()?.errorText ?? ''}`.trim());
+          noteActivity();
+        });
+        await page.addInitScript(() => {
+          const removeUnservedFixtureRows = () => document.querySelector('#issue_43')?.remove();
+          new MutationObserver(removeUnservedFixtureRows).observe(document, { childList: true, subtree: true });
+          removeUnservedFixtureRows();
+        });
+        return page;
+      }
+
+      const page = await configurePage(await context.newPage());
 
       await use({
         currentRowHtml: currentRow(fixtures.prList),
@@ -190,6 +198,9 @@ export const test = base.extend<{ extension: ExtensionHarness }>({
             (window as Window & { __prOverviewCounterSnapshots?: NativeCounterSnapshot[] }).__prOverviewCounterSnapshots ?? [],
           );
         },
+        async openPage() {
+          return configurePage(await context.newPage());
+        },
         page,
         async recordNativeCounterAtHostConnection() {
           await page.addInitScript(() => {
@@ -212,6 +223,14 @@ export const test = base.extend<{ extension: ExtensionHarness }>({
               }
             });
           });
+        },
+        async setEnabled(enabled) {
+          await worker.evaluate(async (value) => {
+            const workerGlobal = globalThis as typeof globalThis & {
+              chrome: { storage: { local: { set(items: { enabled: boolean }): Promise<void> } } };
+            };
+            await workerGlobal.chrome.storage.local.set({ enabled: value });
+          }, enabled);
         },
         urls,
       });

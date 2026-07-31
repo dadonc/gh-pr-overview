@@ -5,6 +5,13 @@ summary to repository pull-request lists while preserving GitHub's native
 right-side comment counter. It runs on URLs matching
 `https://github.com/*/*/pulls*`.
 
+## Toolbar control
+
+Click the GitHub PR Overview toolbar icon to disable or enable the extension
+globally. The full-color icon means enabled; the dimmed grayscale icon means
+disabled. Changes apply immediately to every open GitHub pull-request list, and
+the choice persists across browser restarts and extension updates.
+
 ## What it shows
 
 - GitHub's untouched native total-comment counter in its original position.
@@ -40,9 +47,10 @@ The extension:
 - never sends repository, pull-request, comment, or account data to an external
   service;
 - keeps its 60-second summary cache in memory only;
-- stores no user data or preferences; and
-- declares no `permissions` or `host_permissions` entries; its only site access
-  is the path-scoped GitHub content script listed above.
+- stores one local `enabled` boolean and no GitHub data; and
+- declares only the `storage` permission, used for that preference. Its only
+  site access is the path-scoped GitHub content script listed above; it declares
+  no `host_permissions`.
 
 The content script parses fetched documents with `DOMParser`. Fetched HTML is
 never inserted into the page or executed.
@@ -67,6 +75,11 @@ Automated fixtures cannot prove them:
 - A completed diff section appears while review-thread and agent sections are still loading.
 - Filtering, Turbo navigation, dynamic rows, and route exit work.
 - Native counters remain untouched through Turbo navigation, route exit, and extension disable.
+- A pinned toolbar click disables and re-enables the extension without opening a popup.
+- All open matching GitHub tabs update immediately without reload.
+- Disabled state uses the dimmed grayscale icon; enabled state uses the full-color icon.
+- The tooltip offers the inverse action in each state.
+- The choice survives a browser restart and extension update.
 - No request leaves `github.com`.
 - Page and extension consoles contain no CSP/runtime errors.
 - Narrow viewport, keyboard focus, dark mode, and reduced motion remain usable.
@@ -86,9 +99,9 @@ npm run verify:manifest
 
 `npm run build` creates the unpacked Chrome Manifest V3 extension in
 `output/chrome-mv3`. The manifest verifier checks that the build contains only
-the path-scoped GitHub content script and does not add a background worker,
-toolbar action, extension permissions, host permissions, or web-accessible
-resources.
+exactly one path-scoped GitHub content script, one popup-free action, one module
+service worker, and the `storage` permission while rejecting host permissions
+and web-accessible resources.
 
 For local development, run `npm run dev` and use WXT's generated development
 output.
