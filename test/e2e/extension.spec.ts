@@ -235,3 +235,38 @@ test('reconciles inserted rows and restores native UI across pushState remounts'
 
   await extension.expectNoFailures();
 });
+
+test('toggles every open PR-list tab immediately without reload', async ({ extension }) => {
+  const secondPage = await extension.openPage();
+  await Promise.all([
+    extension.page.goto(extension.urls.prList),
+    secondPage.goto(extension.urls.prList),
+  ]);
+
+  const firstHost = extension.page.locator('#issue_42 github-pr-overview');
+  const secondHost = secondPage.locator('#issue_42 github-pr-overview');
+  await expect(firstHost).toHaveCount(1);
+  await expect(secondHost).toHaveCount(1);
+
+  await extension.setEnabled(false);
+  await expect(firstHost).toHaveCount(0);
+  await expect(secondHost).toHaveCount(0);
+  await expect(extension.page.locator('#issue_42 a[aria-label="2 comments"]')).toBeVisible();
+  await expect(secondPage.locator('#issue_42 a[aria-label="2 comments"]')).toBeVisible();
+
+  await extension.setEnabled(true);
+  await expect(firstHost).toHaveCount(1);
+  await expect(secondHost).toHaveCount(1);
+
+  await secondPage.close();
+  await extension.expectNoFailures();
+});
+
+test('does not flash overview UI when stored state is disabled before navigation', async ({ extension }) => {
+  await extension.setEnabled(false);
+  await extension.page.goto(extension.urls.prList);
+
+  await expect(extension.page.locator('github-pr-overview')).toHaveCount(0);
+  await expect(extension.page.locator('#issue_42 a[aria-label="2 comments"]')).toBeVisible();
+  await extension.expectNoFailures();
+});
