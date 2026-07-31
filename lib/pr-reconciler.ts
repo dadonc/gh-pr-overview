@@ -1,10 +1,9 @@
-import type { PullRequestSummary, SectionState, TotalComments } from './domain';
+import type { PullRequestSummary } from './domain';
 import type { PullRequestIdentity } from './domain';
 import type { PullRequestRemoteSummary } from './github-client';
 import type { PullRequestRowExtraction } from './github-dom';
 import {
   extractPullRequestRow,
-  findNativeCommentCounter,
   findPullRequestTitle,
 } from './github-dom';
 
@@ -39,40 +38,8 @@ export interface PageReconcilerOptions {
   IntersectionObserver?: ObserverConstructor;
 }
 
-interface AttributeSnapshot {
-  ariaHidden: string | null;
-  hidden: string | null;
-  tabindex: string | null;
-  style: string | null;
-}
-
-interface NativeCounterState {
-  element: HTMLAnchorElement;
-  snapshot: AttributeSnapshot;
-}
-
 function identityKey(identity: PullRequestIdentity): string {
   return `${identity.owner.toLowerCase()}/${identity.repository.toLowerCase()}#${identity.number}`;
-}
-
-/** Mirrors the extractor's counter semantics and never mistakes the PR title for a counter. */
-function nativeCounter(row: HTMLElement, extraction: PullRequestRowExtraction): HTMLAnchorElement | undefined {
-  if (extraction.nativeComments.status === 'zero') return undefined;
-  const title = findPullRequestTitle(row)?.anchor;
-  return findNativeCommentCounter(row, title);
-}
-
-function totalComments(extraction: PullRequestRowExtraction): SectionState<TotalComments> {
-  const native = extraction.nativeComments;
-  if (native.status === 'ready') return { data: { count: native.count, href: native.href }, status: 'ready' };
-  if (native.status === 'zero') return { data: { count: 0, href: `/${extraction.identity.owner}/${extraction.identity.repository}/pull/${extraction.identity.number}` }, status: 'ready' };
-  return { message: native.reason, status: 'error' };
-}
-
-function sameNativeComments(left: PullRequestRowExtraction['nativeComments'], right: PullRequestRowExtraction['nativeComments']): boolean {
-  if (left.status !== right.status) return false;
-  if (left.status === 'ready' && right.status === 'ready') return left.count === right.count && left.href === right.href;
-  return left.status !== 'error' || right.status !== 'error' || left.reason === right.reason;
 }
 
 function loadingSummary(extraction: PullRequestRowExtraction): PullRequestSummary {
@@ -81,12 +48,11 @@ function loadingSummary(extraction: PullRequestRowExtraction): PullRequestSummar
     authoredByViewer: Boolean(extraction.viewerLogin && extraction.authorLogin && extraction.viewerLogin.toLowerCase() === extraction.authorLogin.toLowerCase()),
     diff: { status: 'loading' },
     reviewThreads: { status: 'loading' },
-    totalComments: totalComments(extraction),
   };
 }
 
 function summaryWithRemote(extraction: PullRequestRowExtraction, remote: PullRequestRemoteSummary): PullRequestSummary {
-  return { ...loadingSummary(extraction), ...remote, totalComments: totalComments(extraction) };
+  return { ...loadingSummary(extraction), ...remote };
 }
 
 function setAttributeExactly(element: Element, name: string, value: string | null): void {
@@ -99,7 +65,6 @@ class RowController {
   private currentExtraction: PullRequestRowExtraction;
   private readonly mountAnchor: HTMLSpanElement;
   private mounted?: MountedCard;
-  private nativeCounter?: NativeCounterState;
   private pendingProps: CardProps;
   private intersectionObserver?: IntersectionObserver;
   private readonly authoredAttribute: string | null;
@@ -122,7 +87,6 @@ class RowController {
     this.currentExtraction = extraction;
     this.authoredAttribute = row.getAttribute('data-pr-overview-authored');
     this.mountAnchor = this.createMountAnchor();
-    this.adoptNativeCounter(extraction);
     this.pendingProps = this.props(loadingSummary(extraction));
     let mounting: MountedCard | Promise<MountedCard>;
     try {
@@ -141,7 +105,6 @@ class RowController {
         return;
       }
       this.mounted = mounted;
-      this.hideCurrentNativeCounter();
       this.setAuthoredAttribute();
       mounted.update(this.pendingProps);
     }).catch(() => this.dispose());
@@ -198,44 +161,6 @@ class RowController {
     return !this.mounted || this.mounted.isConnected();
   }
 
-  private snapshot(element: Element): AttributeSnapshot {
-    return { ariaHidden: element.getAttribute('aria-hidden'), hidden: element.getAttribute('hidden'), style: element.getAttribute('style'), tabindex: element.getAttribute('tabindex') };
-  }
-
-  private hideCurrentNativeCounter(): void {
-    const state = this.nativeCounter;
-    if (!state || nativeCounter(this.row, this.currentExtraction) !== state.element) return;
-    state.element.hidden = true;
-    state.element.setAttribute('aria-hidden', 'true');
-    state.element.setAttribute('tabindex', '-1');
-  }
-
-  private restoreNativeCounter(): void {
-    const state = this.nativeCounter;
-    if (!state) return;
-    setAttributeExactly(state.element, 'hidden', state.snapshot.hidden);
-    setAttributeExactly(state.element, 'aria-hidden', state.snapshot.ariaHidden);
-    setAttributeExactly(state.element, 'tabindex', state.snapshot.tabindex);
-    setAttributeExactly(state.element, 'style', state.snapshot.style);
-    this.nativeCounter = undefined;
-  }
-
-  private adoptNativeCounter(extraction: PullRequestRowExtraction): void {
-    const element = nativeCounter(this.row, extraction);
-    if (element === this.nativeCounter?.element) return;
-    this.restoreNativeCounter();
-    if (!element) return;
-    this.nativeCounter = { element, snapshot: this.snapshot(element) };
-    if (this.mounted) this.hideCurrentNativeCounter();
-  }
-
-  private needsNativeCounterRefresh(extraction: PullRequestRowExtraction): boolean {
-    if (!this.nativeCounter) return extraction.nativeComments.status !== 'zero';
-    return !this.nativeCounter.element.isConnected ||
-      !this.row.contains(this.nativeCounter.element) ||
-      !sameNativeComments(this.currentExtraction.nativeComments, extraction.nativeComments);
-  }
-
   private setAuthoredAttribute(): void {
     if (loadingSummary(this.currentExtraction).authoredByViewer) this.row.setAttribute('data-pr-overview-authored', 'true');
   }
@@ -245,13 +170,10 @@ class RowController {
     return { conversationHref: base, filesHref: `${base}/files`, summary };
   }
 
-  private refreshNative(extraction: PullRequestRowExtraction, nativeDirty: boolean): void {
+  private refreshExtraction(extraction: PullRequestRowExtraction): void {
     if (this.disposed) return;
     if (identityKey(extraction.identity) !== identityKey(this.currentExtraction.identity)) return;
-    const refreshNativeCounter = nativeDirty || this.needsNativeCounterRefresh(extraction);
     this.currentExtraction = extraction;
-    if (refreshNativeCounter) this.adoptNativeCounter(extraction);
-    this.render(this.props({ ...this.pendingProps.summary, totalComments: totalComments(extraction) }));
   }
 
   private render(props: CardProps): void {
@@ -266,8 +188,8 @@ class RowController {
       this.ownsConnectedMountedUi();
   }
 
-  refresh(extraction: PullRequestRowExtraction, nativeDirty: boolean): void {
-    this.refreshNative(extraction, nativeDirty);
+  refresh(extraction: PullRequestRowExtraction): void {
+    this.refreshExtraction(extraction);
   }
 
   noteMountedUiRemoval(): void {
@@ -292,14 +214,12 @@ class RowController {
       const extraction = matchingExtraction();
       if (!extraction) return;
       this.currentExtraction = extraction;
-      this.adoptNativeCounter(extraction);
       this.render(this.props(summaryWithRemote(extraction, remote)));
     }).catch((error: unknown) => {
       if (this.disposed || this.ownEpoch !== this.epoch() || abortController.signal.aborted) return;
       const extraction = matchingExtraction();
       if (!extraction) return;
       this.currentExtraction = extraction;
-      this.adoptNativeCounter(extraction);
       const message = error instanceof Error ? error.message : 'GitHub data could not be loaded.';
       this.render(this.props({ ...loadingSummary(extraction), agents: { message, status: 'error' }, diff: { message, status: 'error' }, reviewThreads: { message, status: 'error' } }));
     });
@@ -311,7 +231,6 @@ class RowController {
     this.abortController?.abort();
     this.intersectionObserver?.disconnect();
     this.mounted?.remove();
-    this.restoreNativeCounter();
     if (this.mountAnchor.isConnected) this.ignoreOwnedRemoval(this.mountAnchor);
     this.mountAnchor.remove();
     setAttributeExactly(this.row, 'data-pr-overview-authored', this.authoredAttribute);
@@ -324,7 +243,6 @@ export function isPullRequestListRoute(url: Pick<Location, 'pathname'>): boolean
 
 export function createPageReconciler(options: PageReconcilerOptions) {
   const controllers = new Map<HTMLElement, RowController>();
-  const nativeDirtyRows = new Set<HTMLElement>();
   const mountedUiDirtyRows = new Set<HTMLElement>();
   const ignoredOwnedRemovals = new WeakSet<Node>();
   let currentEpoch = 0;
@@ -354,7 +272,6 @@ export function createPageReconciler(options: PageReconcilerOptions) {
         const target = record.target.nodeType === 1 ? record.target as Element : record.target.parentElement;
         const row = target?.closest<HTMLElement>('[id^="issue_"].js-issue-row');
         if (!row) continue;
-        nativeDirtyRows.add(row);
         if (record.type === 'childList' && [...record.removedNodes].some((node) =>
           node.nodeType === 1 &&
           ((node as Element).matches('github-pr-overview') || Boolean((node as Element).querySelector('github-pr-overview'))),
@@ -374,7 +291,6 @@ export function createPageReconciler(options: PageReconcilerOptions) {
     currentEpoch += 1;
     for (const controller of controllers.values()) controller.dispose();
     controllers.clear();
-    nativeDirtyRows.clear();
     mountedUiDirtyRows.clear();
   };
   const reconcile = () => {
@@ -392,14 +308,13 @@ export function createPageReconciler(options: PageReconcilerOptions) {
     const found = new Set(rows);
     for (const [row, controller] of controllers) {
       const extraction = row.isConnected ? extractions.get(row) : undefined;
-      const nativeDirty = nativeDirtyRows.delete(row);
       const mountedUiDirty = mountedUiDirtyRows.delete(row);
       if (!found.has(row) || !extraction || !controller.matches(extraction)) {
         controller.dispose();
         controllers.delete(row);
       } else {
         if (mountedUiDirty) controller.noteMountedUiRemoval();
-        controller.refresh(extraction, nativeDirty);
+        controller.refresh(extraction);
       }
     }
     for (const row of rows) {
@@ -419,7 +334,6 @@ export function createPageReconciler(options: PageReconcilerOptions) {
         options.IntersectionObserver,
       ));
     }
-    nativeDirtyRows.clear();
     mountedUiDirtyRows.clear();
   };
   return {

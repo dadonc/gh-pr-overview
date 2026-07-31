@@ -5,7 +5,6 @@ import type {
   PullRequestIdentity,
   PullRequestSummary,
   SectionState,
-  TotalComments,
 } from './domain';
 
 describe('domain data contracts', () => {
@@ -20,24 +19,20 @@ describe('domain data contracts', () => {
   });
 
   it('supports each approved SectionState and PR summary shape', () => {
-    const loading: SectionState<TotalComments> = { status: 'loading' };
-    const ready: SectionState<TotalComments> = {
-      status: 'ready',
-      data: { count: 8, href: '#comments' },
-    };
-    const partial: SectionState<TotalComments> = {
+    const loading: SectionState<string> = { status: 'loading' };
+    const ready: SectionState<string> = { status: 'ready', data: 'ready' };
+    const partial: SectionState<string> = {
       status: 'partial',
-      data: { count: 8, href: '#comments' },
-      reason: 'GitHub did not return every comment page.',
+      data: 'partial',
+      reason: 'GitHub returned incomplete data.',
     };
-    const failed: SectionState<TotalComments> = {
+    const failed: SectionState<string> = {
       status: 'error',
       message: 'GitHub request failed.',
     };
     const agents: readonly AgentParticipation[] = [];
 
     const summary: PullRequestSummary = {
-      totalComments: ready,
       reviewThreads: {
         status: 'partial',
         data: { unresolved: 2, resolvedOrOutdated: 3, total: 5 },
@@ -51,16 +46,14 @@ describe('domain data contracts', () => {
       authoredByViewer: true,
     };
 
-    expect([loading, partial, failed]).toHaveLength(3);
-    expect(summary.totalComments).toEqual(ready);
+    expect([loading, ready, partial, failed]).toHaveLength(4);
+    expect(summary).not.toHaveProperty('totalComments');
   });
 });
 
 if (false) {
   // @ts-expect-error Ready states require data.
-  const missingReadyData: SectionState<TotalComments> = { status: 'ready' };
-  // @ts-expect-error TotalComments href is a required string.
-  const wrongCommentHref: TotalComments = { count: 1, href: 1 };
+  const missingReadyData: SectionState<string> = { status: 'ready' };
   const participation: AgentParticipation = {
     agentId: 'gemini',
     responseCount: 0,
@@ -71,5 +64,4 @@ if (false) {
   participation.requestSources.push('eyes-reaction');
 
   void missingReadyData;
-  void wrongCommentHref;
 }

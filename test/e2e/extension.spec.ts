@@ -46,8 +46,8 @@ test('boots the unpacked extension with a rendered, isolated shadow card', async
   await expect(extension.page.locator('[id^="issue_"].js-issue-row')).toHaveCount(1);
   await expect(host).toHaveCount(1);
   await expect.poll(() => card.evaluate(readVisibleCardLine))
-    .toBe('2 comments · 0 unresolved · −353/+524 · 18 files · Copilot 1');
-  await expect(nativeCounter).toBeHidden();
+    .toBe('0 unresolved · −353/+524 · 18 files · Copilot 1');
+  await expect(nativeCounter).toBeVisible();
 
   const typography = await card.evaluate((element) => {
     const weight = (selector: string) =>
@@ -55,7 +55,6 @@ test('boots the unpacked extension with a rendered, isolated shadow card', async
     return {
       additions: getComputedStyle(element.querySelector<HTMLElement>('.additions')!).color,
       agent: weight('.agent'),
-      comments: weight('.comments'),
       deletions: getComputedStyle(element.querySelector<HTMLElement>('.deletions')!).color,
       diff: weight('.diff'),
       separator: weight('.separator'),
@@ -65,7 +64,6 @@ test('boots the unpacked extension with a rendered, isolated shadow card', async
   expect(typography).toEqual({
     additions: 'rgb(26, 127, 55)',
     agent: '400',
-    comments: '400',
     deletions: 'rgb(209, 36, 47)',
     diff: '400',
     separator: '400',
@@ -74,7 +72,7 @@ test('boots the unpacked extension with a rendered, isolated shadow card', async
 
   const verticalSpread = await card.evaluate((element) => {
     const tops = [...element.querySelectorAll<HTMLElement>(
-      ':scope > .comments, :scope > .separator, :scope > .unresolved, :scope > .diff, :scope > .agent',
+      ':scope > .separator, :scope > .unresolved, :scope > .diff, :scope > .agent',
     )].map((node) => node.getBoundingClientRect().top);
     return Math.max(...tops) - Math.min(...tops);
   });
@@ -115,6 +113,10 @@ test('boots the unpacked extension with a rendered, isolated shadow card', async
     tabindex: null,
     visibility: 'visible',
   }]);
+  expect(await nativeCounter.evaluate(readNativeCounterSnapshot)).toEqual(
+    (await extension.nativeCounterSnapshotsAtHostConnection())[0],
+  );
+  await expect(card.locator(':scope > .separator')).toHaveCount(2);
   await expect.poll(() => extension.page.evaluate(() =>
     getComputedStyle(document.querySelector<HTMLAnchorElement>('#issue_42 .Link--primary')!).fontSize,
   )).toBe('40px');
@@ -138,11 +140,11 @@ test('keeps the strict line inside the row and scrolls it internally at narrow w
   const row = extension.page.locator('#issue_42');
   const card = row.locator('github-pr-overview').locator('.pr-overview-card');
   await expect.poll(() => card.evaluate(readVisibleCardLine))
-    .toBe('2 comments · 0 unresolved · −353/+524 · 18 files · Copilot 1');
+    .toBe('0 unresolved · −353/+524 · 18 files · Copilot 1');
 
   const layout = await card.evaluate((element) => {
     const visibleChildren = [...element.querySelectorAll<HTMLElement>(
-      ':scope > .comments, :scope > .separator, :scope > .unresolved, :scope > .diff, :scope > .agent',
+      ':scope > .separator, :scope > .unresolved, :scope > .diff, :scope > .agent',
     )];
     const tops = visibleChildren.map((node) => node.getBoundingClientRect().top);
     const shadowRoot = element.getRootNode();
@@ -186,8 +188,8 @@ test('reconciles inserted rows and restores native UI across pushState remounts'
   const nativeCounter = row.locator('a[aria-label="2 comments"]');
   await expect(host).toHaveCount(1);
   await expect.poll(() => host.locator('.pr-overview-card').evaluate(readVisibleCardLine))
-    .toBe('2 comments · 0 unresolved · −353/+524 · 18 files · Copilot 1');
-  await expect(nativeCounter).toBeHidden();
+    .toBe('0 unresolved · −353/+524 · 18 files · Copilot 1');
+  await expect(nativeCounter).toBeVisible();
   const pristineNativeCounter = await extension.nativeCounterSnapshotsAtHostConnection().then((snapshots) => snapshots[0]!);
 
   await extension.page.evaluate((rowHtml) => {
@@ -200,7 +202,8 @@ test('reconciles inserted rows and restores native UI across pushState remounts'
   const inserted = extension.page.locator('#issue_420');
   await expect(inserted.locator('github-pr-overview')).toHaveCount(1);
   await expect.poll(() => inserted.locator('.pr-overview-card').evaluate(readVisibleCardLine))
-    .toBe('2 comments · 0 unresolved · −353/+524 · 18 files · Copilot 1');
+    .toBe('0 unresolved · −353/+524 · 18 files · Copilot 1');
+  await expect(inserted.locator('a[aria-label="2 comments"]')).toBeVisible();
   await expect(extension.page.locator('github-pr-overview')).toHaveCount(2);
 
   await inserted.evaluate((element) => element.remove());
@@ -223,7 +226,10 @@ test('reconciles inserted rows and restores native UI across pushState remounts'
   const remountedHost = remountedRow.locator('github-pr-overview');
   await expect(remountedHost).toHaveCount(1);
   await expect.poll(() => remountedHost.locator('.pr-overview-card').evaluate(readVisibleCardLine))
-    .toBe('7 comments · 0 unresolved · −353/+524 · 18 files · Copilot 1');
+    .toBe('0 unresolved · −353/+524 · 18 files · Copilot 1');
+  const remountedCounter = remountedRow.locator('a[aria-label="7 comments"]');
+  await expect(remountedCounter).toBeVisible();
+  await expect(remountedCounter).toHaveText('7');
   await expect(remountedHost).toHaveCount(1);
   await expect(extension.page.locator('github-pr-overview')).toHaveCount(1);
 

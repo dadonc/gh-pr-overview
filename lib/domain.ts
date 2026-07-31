@@ -4,11 +4,6 @@ export type SectionState<T> =
   | { data: T; reason: string; status: 'partial' }
   | { message: string; status: 'error' };
 
-export interface TotalComments {
-  count: number;
-  href: string;
-}
-
 export interface ReviewThread {
   id: string;
   isResolved: boolean;
@@ -81,7 +76,6 @@ export interface PullRequestSummary {
   authoredByViewer: boolean;
   diff: SectionState<DiffSummary>;
   reviewThreads: SectionState<ReviewThreadCounts>;
-  totalComments: SectionState<TotalComments>;
 }
 
 export interface ResponseArtifact {

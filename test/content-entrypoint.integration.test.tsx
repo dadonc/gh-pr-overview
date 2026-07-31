@@ -93,8 +93,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it('renders the real content entrypoint with fixture-backed data and restores the native counter on invalidation', async () => {
+it('renders the real content entrypoint and never mutates the native counter', async () => {
   currentPullRequestRow();
+  const nativeCounter = document.querySelector<HTMLAnchorElement>('a[aria-label="2 comments"]')!;
+  const nativeAttributes = {
+    ariaHidden: nativeCounter.getAttribute('aria-hidden'),
+    hidden: nativeCounter.hidden,
+    style: nativeCounter.getAttribute('style'),
+    tabindex: nativeCounter.getAttribute('tabindex'),
+  };
   const fixtures = new Map([
     ['https://github.com/octo/demo/pull/42', currentConversationHtml],
     ['https://github.com/octo/demo/pull/42/files', currentFilesHtml],
@@ -129,8 +136,15 @@ it('renders the real content entrypoint with fixture-backed data and restores th
   expect(wxtBoundary.options).not.toHaveProperty('cssInjectionMode');
 
   await waitFor(() => {
-    expect(renderedOverviewLine()).toBe('2 comments · 0 unresolved · −353/+524 · 18 files · Copilot 1');
+    expect(renderedOverviewLine()).toBe('0 unresolved · −353/+524 · 18 files · Copilot 1');
   });
+  expect(nativeCounter).toBeVisible();
+  expect({
+    ariaHidden: nativeCounter.getAttribute('aria-hidden'),
+    hidden: nativeCounter.hidden,
+    style: nativeCounter.getAttribute('style'),
+    tabindex: nativeCounter.getAttribute('tabindex'),
+  }).toEqual(nativeAttributes);
   expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual(expect.arrayContaining([...fixtures.keys()]));
   expect(fetcher).toHaveBeenCalledTimes(3);
   for (const [, init] of fetcher.mock.calls) {
@@ -146,11 +160,12 @@ it('renders the real content entrypoint with fixture-backed data and restores th
     frames.shift()!(0);
   });
 
-  const nativeCounter = document.querySelector<HTMLAnchorElement>('a[aria-label="2 comments"]')!;
-  expect(nativeCounter.hidden).toBe(true);
   await act(async () => { invalidations.at(-1)!(); });
   expect(document.querySelector('github-pr-overview')).toBeNull();
-  expect(nativeCounter.hidden).toBe(false);
-  expect(nativeCounter).not.toHaveAttribute('aria-hidden');
-  expect(nativeCounter).not.toHaveAttribute('tabindex');
+  expect({
+    ariaHidden: nativeCounter.getAttribute('aria-hidden'),
+    hidden: nativeCounter.hidden,
+    style: nativeCounter.getAttribute('style'),
+    tabindex: nativeCounter.getAttribute('tabindex'),
+  }).toEqual(nativeAttributes);
 });

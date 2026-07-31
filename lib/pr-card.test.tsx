@@ -12,7 +12,6 @@ const ready: PullRequestSummary = {
   authoredByViewer: true,
   diff: { data: { additions: 340, deletions: 81, filesChanged: 12 }, status: 'ready' },
   reviewThreads: { data: { resolvedOrOutdated: 6, total: 8, unresolved: 2 }, status: 'ready' },
-  totalComments: { data: { count: 23, href: '/octo/demo/pull/42#issuecomment-23' }, status: 'ready' },
 };
 
 function visibleCardText(card = screen.getByTestId('pr-card')): string {
@@ -57,7 +56,6 @@ describe('PullRequestCard', () => {
         { agentId: 'gemini', responseCount: 0, requestSources: ['formal-review-request'], state: 'requested' },
       ], status: 'ready' },
       reviewThreads: { data: { total: 0, unresolved: 0, resolvedOrOutdated: 0 }, status: 'ready' },
-      totalComments: { data: { count: 0, href: '/o/r/pull/1' }, status: 'ready' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
     expect(visibleCardText()).toBe('0 unresolved · −81/+340 · 12 files · Gemini 0');
@@ -77,7 +75,6 @@ describe('PullRequestCard', () => {
   it('keeps loading, partial, and error states in their fixed line positions', () => {
     render(<PullRequestCard summary={{
       ...ready,
-      totalComments: { message: 'GitHub counter is malformed.', status: 'error' },
       reviewThreads: { data: { total: 8, unresolved: 2, resolvedOrOutdated: 6 }, reason: 'More content is loading.', status: 'partial' },
       diff: { data: { additions: 340, deletions: 81, filesChanged: 12 }, reason: 'Collapsed files.', status: 'partial' },
       agents: { status: 'loading' },
@@ -92,7 +89,6 @@ describe('PullRequestCard', () => {
   it('uses singular grammar and exposes extension error reasons to assistive technology', () => {
     const view = render(<PullRequestCard summary={{
       ...ready,
-      totalComments: { data: { count: 1, href: '/o/r/pull/1#comments' }, status: 'ready' },
       reviewThreads: { data: { total: 1, unresolved: 1, resolvedOrOutdated: 0 }, status: 'ready' },
       diff: { data: { additions: 1, deletions: 1, filesChanged: 1 }, status: 'ready' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
@@ -118,7 +114,6 @@ describe('PullRequestCard', () => {
   it('marks partial metrics as lower bounds and never treats partial empty agents as definitive', () => {
     render(<PullRequestCard summary={{
       ...ready,
-      totalComments: { data: { count: 23, href: '/o/r/pull/1#comments' }, reason: 'counter may still change', status: 'partial' },
       reviewThreads: { data: { total: 8, unresolved: 0, resolvedOrOutdated: 6 }, reason: 'timeline is incomplete', status: 'partial' },
       agents: { data: [], reason: 'timeline is incomplete', status: 'partial' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
