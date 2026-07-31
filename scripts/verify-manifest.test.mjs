@@ -9,6 +9,19 @@ import wxtConfig from '../wxt.config.ts';
 import { validateManifest, verifyManifest } from './verify-manifest.mjs';
 
 const expectedManifest = {
+  action: {
+    default_icon: {
+      16: 'icon/16.png',
+      32: 'icon/32.png',
+      48: 'icon/48.png',
+      96: 'icon/96.png',
+      128: 'icon/128.png',
+    },
+  },
+  background: {
+    service_worker: 'background.js',
+    type: 'module',
+  },
   content_scripts: [
     {
       all_frames: false,
@@ -28,6 +41,7 @@ const expectedManifest = {
   },
   manifest_version: 3,
   name: 'GitHub PR Overview',
+  permissions: ['storage'],
   version: '0.1.0',
 };
 
@@ -46,7 +60,7 @@ describe('validateManifest', () => {
     await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })));
   });
 
-  it('accepts the minimal generated MV3 manifest', () => {
+  it('accepts the exact popup-free action, module worker, and storage permission', () => {
     expect(validateManifest(expectedManifest)).toEqual([]);
   });
 
@@ -60,16 +74,39 @@ describe('validateManifest', () => {
   });
 
   it.each([
-    'action',
-    'background',
     'host_permissions',
     'optional_host_permissions',
     'optional_permissions',
-    'permissions',
-    'storage',
     'web_accessible_resources',
-  ])('rejects the unnecessary %s field', (field) => {
-    expect(validateManifest({ ...expectedManifest, [field]: [] })).toContain(`Unexpected manifest field: ${field}`);
+  ])('rejects the forbidden %s field', (field) => {
+    expect(validateManifest({ ...expectedManifest, [field]: [] }))
+      .toContain(`Unexpected manifest field: ${field}`);
+  });
+
+  it('rejects a popup and non-packaged action icon', () => {
+    expect(validateManifest({
+      ...expectedManifest,
+      action: {
+        ...expectedManifest.action,
+        default_icon: { 16: 'other.png' },
+        default_popup: 'popup.html',
+      },
+    })).toEqual([
+      'Unexpected action field: default_popup',
+      'Action icons must be the packaged 16, 32, 48, 96, and 128px PNGs',
+    ]);
+  });
+
+  it('rejects extra permissions and a non-module background worker', () => {
+    expect(validateManifest({
+      ...expectedManifest,
+      background: { service_worker: 'worker.js' },
+      permissions: ['storage', 'tabs'],
+    })).toEqual([
+      'Background service worker must be background.js',
+      'Background service worker type must be module',
+      'Manifest permissions must be exactly storage',
+    ]);
   });
 
   it.each([

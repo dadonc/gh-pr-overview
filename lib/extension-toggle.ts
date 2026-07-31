@@ -41,9 +41,9 @@ export function enabledFromStorageChange(
   return enabledFromStoredValue(changes[ENABLED_STORAGE_KEY]?.newValue);
 }
 
-export async function readEnabled(storage: LocalStoragePort): Promise<boolean> {
+export async function readEnabled(storageArea: LocalStoragePort): Promise<boolean> {
   try {
-    const values = await storage.get(ENABLED_STORAGE_KEY);
+    const values = await storageArea.get(ENABLED_STORAGE_KEY);
     return enabledFromStoredValue(values[ENABLED_STORAGE_KEY]);
   } catch {
     console.warn('Unable to read extension enabled preference; defaulting to enabled.');
@@ -52,8 +52,8 @@ export async function readEnabled(storage: LocalStoragePort): Promise<boolean> {
 }
 
 export async function writeEnabled(
-  storage: LocalStoragePort,
+  storageArea: LocalStoragePort,
   enabled: boolean,
 ): Promise<void> {
-  await storage.set({ [ENABLED_STORAGE_KEY]: enabled });
+  await storageArea.set({ [ENABLED_STORAGE_KEY]: enabled });
 }

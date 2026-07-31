@@ -5,15 +5,21 @@ import { isUint8Array } from 'node:util/types';
 
 const ALLOWED_FILES = [
   'content-scripts/content.js',
+  'background.js',
   'icon/128.png',
   'icon/16.png',
   'icon/32.png',
   'icon/48.png',
   'icon/96.png',
+  'icon/disabled/128.png',
+  'icon/disabled/16.png',
+  'icon/disabled/32.png',
+  'icon/disabled/48.png',
+  'icon/disabled/96.png',
   'manifest.json',
 ];
 const ALLOWED_FILE_SET = new Set(ALLOWED_FILES);
-const ALLOWED_DIRECTORIES = new Set(['content-scripts', 'icon']);
+const ALLOWED_DIRECTORIES = new Set(['content-scripts', 'icon', 'icon/disabled']);
 const CONTENT_SCRIPT_FILE = 'content-scripts/content.js';
 const MAX_CONTENT_SCRIPT_BYTES = 250_000;
 const MAX_BUNDLE_BYTES = 270_000;
@@ -175,7 +181,7 @@ async function scanBundle(bundlePath) {
       if (metadata.isSymbolicLink()) {
         errors.push(`Unsupported bundle filesystem entry: ${path} (symbolic link)`);
       } else if (metadata.isDirectory()) {
-        if (!directoryPath && ALLOWED_DIRECTORIES.has(entry.name)) {
+        if (ALLOWED_DIRECTORIES.has(path)) {
           await scanDirectory(filePath, path);
         } else {
           errors.push(`Unexpected bundle directory: ${path}`);

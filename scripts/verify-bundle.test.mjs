@@ -9,11 +9,17 @@ import { validateBundle, verifyBundle } from './verify-bundle.mjs';
 
 const ALLOWED_FILES = [
   'content-scripts/content.js',
+  'background.js',
   'icon/128.png',
   'icon/16.png',
   'icon/32.png',
   'icon/48.png',
   'icon/96.png',
+  'icon/disabled/128.png',
+  'icon/disabled/16.png',
+  'icon/disabled/32.png',
+  'icon/disabled/48.png',
+  'icon/disabled/96.png',
   'manifest.json',
 ];
 const temporaryBundles = [];
@@ -71,12 +77,16 @@ describe('validateBundle', () => {
     }))).toEqual(['Unexpected bundle file: content-scripts/content.css']);
   });
 
-  it('rejects a missing required package file', () => {
-    expect(validateBundle(validBundle({
-      files: ALLOWED_FILES.filter((file) => file !== 'icon/16.png'),
-      sizes: ALLOWED_FILES.filter((file) => file !== 'icon/16.png').map(() => 1),
-    }))).toEqual(['Missing bundle file: icon/16.png']);
-  });
+  it.each(['background.js', 'icon/disabled/16.png'])(
+    'rejects a missing required %s file',
+    (missing) => {
+      const files = ALLOWED_FILES.filter((file) => file !== missing);
+      expect(validateBundle(validBundle({
+        files,
+        sizes: files.map(() => 1),
+      }))).toContain(`Missing bundle file: ${missing}`);
+    },
+  );
 
   it('rejects a content script larger than 250,000 bytes', () => {
     expect(validateBundle(validBundle({
@@ -144,32 +154,32 @@ describe('validateBundle', () => {
 
   it('rejects a Chrome package larger than 270,000 bytes', () => {
     expect(validateBundle(validBundle({
-      sizes: [1, 270_000, 0, 0, 0, 0, 0],
+      sizes: [1, 270_000, ...ALLOWED_FILES.slice(2).map(() => 0)],
     }))).toEqual(['Chrome bundle exceeds 270000 bytes: 270001']);
   });
 
   it('rejects a bundle total that overflows a safe integer', () => {
     expect(validateBundle(validBundle({
-      sizes: [1, Number.MAX_SAFE_INTEGER, 0, 0, 0, 0, 0],
+      sizes: [1, Number.MAX_SAFE_INTEGER, ...ALLOWED_FILES.slice(2).map(() => 0)],
     }))).toEqual(['Chrome bundle size total must be a safe integer']);
   });
 
   it('accepts content and total sizes at their exact byte limits', () => {
     expect(validateBundle(validBundle({
       contentScript: Buffer.alloc(250_000),
-      sizes: [250_000, 20_000, 0, 0, 0, 0, 0],
+      sizes: [250_000, 20_000, ...ALLOWED_FILES.slice(2).map(() => 0)],
     }))).toEqual([]);
   });
 
   it('rejects content and total sizes one byte past their limits', () => {
     expect(validateBundle(validBundle({
       contentScript: Buffer.alloc(250_001),
-      sizes: [250_001, 0, 0, 0, 0, 0, 0],
+      sizes: [250_001, ...ALLOWED_FILES.slice(1).map(() => 0)],
     }))).toEqual(['Content script exceeds 250000 bytes: 250001']);
 
     expect(validateBundle(validBundle({
       contentScript: Buffer.alloc(250_000),
-      sizes: [250_000, 20_001, 0, 0, 0, 0, 0],
+      sizes: [250_000, 20_001, ...ALLOWED_FILES.slice(2).map(() => 0)],
     }))).toEqual(['Chrome bundle exceeds 270000 bytes: 270001']);
   });
 
@@ -185,8 +195,8 @@ describe('validateBundle', () => {
   });
 
   it.each([
-    ['a missing size', { sizes: ALLOWED_FILES.slice(0, -1).map(() => 1) }, 'Expected one size per bundle file: received 6 sizes for 7 files'],
-    ['an extra size', { sizes: [...ALLOWED_FILES.map(() => 1), 1] }, 'Expected one size per bundle file: received 8 sizes for 7 files'],
+    ['a missing size', { sizes: ALLOWED_FILES.slice(0, -1).map(() => 1) }, 'Expected one size per bundle file: received 12 sizes for 13 files'],
+    ['an extra size', { sizes: [...ALLOWED_FILES.map(() => 1), 1] }, 'Expected one size per bundle file: received 14 sizes for 13 files'],
     ['a NaN size', { sizes: [Number.NaN, ...ALLOWED_FILES.slice(1).map(() => 1)] }, 'Invalid bundle size at index 0: expected a non-negative safe integer'],
     ['a negative size', { sizes: [-1, ...ALLOWED_FILES.slice(1).map(() => 1)] }, 'Invalid bundle size at index 0: expected a non-negative safe integer'],
     ['an unsafe size', { sizes: [Number.MAX_SAFE_INTEGER + 1, ...ALLOWED_FILES.slice(1).map(() => 1)] }, 'Invalid bundle size at index 0: expected a non-negative safe integer'],
@@ -215,11 +225,17 @@ describe('validateBundle', () => {
     expect(validateBundle(payload)).toEqual([
       'Duplicate bundle file: manifest.json',
       'Missing bundle file: content-scripts/content.js',
+      'Missing bundle file: background.js',
       'Missing bundle file: icon/128.png',
       'Missing bundle file: icon/16.png',
       'Missing bundle file: icon/32.png',
       'Missing bundle file: icon/48.png',
       'Missing bundle file: icon/96.png',
+      'Missing bundle file: icon/disabled/128.png',
+      'Missing bundle file: icon/disabled/16.png',
+      'Missing bundle file: icon/disabled/32.png',
+      'Missing bundle file: icon/disabled/48.png',
+      'Missing bundle file: icon/disabled/96.png',
       'Expected one size per bundle file: received 1 size for 2 files',
       'Invalid bundle size at index 0: expected a non-negative safe integer',
       'Content script must be a string, Buffer, or Uint8Array',
@@ -280,6 +296,17 @@ describe('validateBundle', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('Unsupported bundle filesystem entry: icon/linked-manifest.json (symbolic link)');
     expect(result.stderr).toContain('Unexpected bundle directory: unused');
+  });
+
+  it('accepts the disabled icon directory but rejects other nested icon directories', async () => {
+    const bundlePath = await createBundle();
+    await mkdir(join(bundlePath, 'icon', 'other'), { recursive: true });
+
+    const result = outputFor(bundlePath);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain('Unexpected bundle directory: icon/disabled');
+    expect(result.stderr).toContain('Unexpected bundle directory: icon/other');
   });
 
   it('rejects a symbolic-link bundle root without traversing it', async () => {
