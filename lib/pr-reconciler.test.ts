@@ -466,25 +466,16 @@ describe('page reconciler', () => {
     reconciler.cleanup();
   });
 
-  it('fills omitted progressive sections from completion without regressing settled sections to loading', async () => {
+  it('fills timeline sections omitted by progressive updates from completion without regressing a ready diff', async () => {
     const document = page(row());
-    const timelineError = { message: 'timeline unavailable', status: 'error' } as const;
     const updates: CardProps[] = [];
+    const completion = Promise.withResolvers<PullRequestRemoteSummary>();
     const reconciler = createPageReconciler({
       document,
       client: {
-        loadPullRequest: vi.fn(async (_identity, options): Promise<PullRequestRemoteSummary> => {
+        loadPullRequest: vi.fn((_identity, options): Promise<PullRequestRemoteSummary> => {
           options!.onUpdate!({ diff: remote.diff, kind: 'diff' });
-          options!.onUpdate!({
-            agents: timelineError,
-            kind: 'timeline',
-            reviewThreads: timelineError,
-          });
-          return {
-            agents: { status: 'loading' },
-            diff: { status: 'loading' },
-            reviewThreads: { status: 'loading' },
-          };
+          return completion.promise;
         }),
       },
       IntersectionObserver: undefined,
@@ -499,8 +490,20 @@ describe('page reconciler', () => {
     reconciler.reconcile();
     await vi.waitFor(() => expect(updates.at(-1)!.summary.diff).toEqual(remote.diff));
 
-    expect(updates.at(-1)!.summary.agents).toEqual(timelineError);
-    expect(updates.at(-1)!.summary.reviewThreads).toEqual(timelineError);
+    expect(updates.at(-1)!.summary.agents).toEqual({ status: 'loading' });
+    expect(updates.at(-1)!.summary.reviewThreads).toEqual({ status: 'loading' });
+
+    completion.resolve({
+      agents: remote.agents,
+      diff: { status: 'loading' },
+      reviewThreads: remote.reviewThreads,
+    });
+
+    await vi.waitFor(() => {
+      expect(updates.at(-1)!.summary.agents).toEqual(remote.agents);
+      expect(updates.at(-1)!.summary.reviewThreads).toEqual(remote.reviewThreads);
+    });
+    expect(updates.at(-1)!.summary.diff).toEqual(remote.diff);
     reconciler.cleanup();
   });
 
