@@ -171,7 +171,7 @@ describe('GitHub pull-request data pipeline', () => {
     controller.abort();
     resolvers.get('https://github.com/octo/demo/pull/42')?.(response('<div id="discussion_bucket"></div>'));
     resolvers.get('https://github.com/octo/demo/pull/42/files')?.(response(diffAggregateHtml, 'https://github.com/octo/demo/pull/42/files'));
-    await pending;
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
 
     expect(updates).toEqual([]);
   });
@@ -744,10 +744,16 @@ describe('GitHub pull-request data pipeline', () => {
     });
   });
 
-  it('uses a credentialed GET with the caller abort signal and rejects redirected cross-origin content', async () => {
+  it('uses a credentialed GET with a request-scoped abort signal and rejects redirected cross-origin content', async () => {
     const signal = new AbortController().signal;
     const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
-      expect(init).toMatchObject({ credentials: 'same-origin', method: 'GET', redirect: 'follow', signal });
+      expect(init).toMatchObject({
+        credentials: 'same-origin',
+        method: 'GET',
+        redirect: 'follow',
+        signal: expect.any(AbortSignal),
+      });
+      expect(init?.signal).not.toBe(signal);
       return response(timelineHtml, 'https://evil.test/octo/demo/pull/42');
     });
 
@@ -1108,6 +1114,135 @@ describe('GitHub pull-request data pipeline', () => {
     expect(maximum).toBe(1);
   });
 
+  it('turns a hanging fetch into a recoverable timeout and releases its limiter slot', async () => {
+    vi.useFakeTimers();
+    try {
+      const started: string[] = [];
+      let hangFiles = true;
+      const fetcher = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+        const value = String(url);
+        started.push(value);
+        if (value.endsWith('/files') && hangFiles) {
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              reject(new DOMException('aborted', 'AbortError'));
+            }, { once: true });
+          });
+        }
+        return Promise.resolve(response(
+          value.endsWith('/files') ? diffAggregateHtml : '<div id="discussion_bucket"></div>',
+          value,
+        ));
+      });
+      const client = clientFor(fetcher, { limiter: createFetchLimiter(1) });
+      const pending = client.loadPullRequest(identity);
+
+      await Promise.resolve();
+      expect(started).toEqual(['https://github.com/octo/demo/pull/42/files']);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(pending).resolves.toMatchObject({
+        diff: { message: 'GitHub request timed out.', status: 'error' },
+        reviewThreads: { status: 'ready' },
+      });
+      expect(started).toEqual([
+        'https://github.com/octo/demo/pull/42/files',
+        'https://github.com/octo/demo/pull/42',
+      ]);
+      hangFiles = false;
+      await expect(client.loadPullRequest(identity)).resolves.toMatchObject({
+        diff: { status: 'ready' },
+      });
+      expect(started).toHaveLength(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aborts an unread error response before releasing its limiter slot', async () => {
+    const started: string[] = [];
+    let rejectedSignal: AbortSignal | undefined;
+    const fetcher = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      const value = String(url);
+      started.push(value);
+      if (value.endsWith('/files')) {
+        rejectedSignal = init?.signal ?? undefined;
+        return new Response('unread error body', {
+          headers: { 'content-type': 'text/html' },
+          status: 500,
+        });
+      }
+      return response('<div id="discussion_bucket"></div>', value);
+    });
+    const client = clientFor(fetcher, { limiter: createFetchLimiter(1) });
+
+    await expect(client.loadPullRequest(identity)).resolves.toMatchObject({
+      diff: { message: 'GitHub request failed (500).', status: 'error' },
+      reviewThreads: { status: 'ready' },
+    });
+    expect(started).toEqual([
+      'https://github.com/octo/demo/pull/42/files',
+      'https://github.com/octo/demo/pull/42',
+    ]);
+    expect(rejectedSignal?.aborted).toBe(true);
+  });
+
+  it('times out while downloading a response body and releases its limiter slot', async () => {
+    vi.useFakeTimers();
+    try {
+      const started: string[] = [];
+      const fetcher = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        const value = String(url);
+        started.push(value);
+        if (value.endsWith('/files')) {
+          return {
+            ...response('', value),
+            text: () => new Promise<string>((_resolve, reject) => {
+              init?.signal?.addEventListener('abort', () => {
+                reject(new DOMException('aborted', 'AbortError'));
+              }, { once: true });
+            }),
+          } as Response;
+        }
+        return response('<div id="discussion_bucket"></div>', value);
+      });
+      const client = clientFor(fetcher, { limiter: createFetchLimiter(1) });
+      const pending = client.loadPullRequest(identity);
+
+      await Promise.resolve();
+      expect(started).toEqual(['https://github.com/octo/demo/pull/42/files']);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(pending).resolves.toMatchObject({
+        diff: { message: 'GitHub request timed out.', status: 'error' },
+        reviewThreads: { status: 'ready' },
+      });
+      expect(started).toEqual([
+        'https://github.com/octo/demo/pull/42/files',
+        'https://github.com/octo/demo/pull/42',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps caller cancellation as AbortError instead of converting it to a timeout', async () => {
+    const controller = new AbortController();
+    const fetcher = vi.fn((_url: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('aborted', 'AbortError'));
+        }, { once: true });
+      }),
+    );
+    const pending = clientFor(fetcher).loadPullRequest(identity, { signal: controller.signal });
+
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalled());
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
   it('does not cache a completed load when its caller aborts before the responses settle', async () => {
     const controller = new AbortController();
     let delayed = true;
@@ -1125,7 +1260,7 @@ describe('GitHub pull-request data pipeline', () => {
     controller.abort();
     resolvers.get('https://github.com/octo/demo/pull/42')?.(response(noFragments, 'https://github.com/octo/demo/pull/42'));
     resolvers.get('https://github.com/octo/demo/pull/42/files')?.(response(diffAggregateHtml, 'https://github.com/octo/demo/pull/42/files'));
-    await pending;
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     delayed = false;
     await client.loadPullRequest(identity);
 
@@ -1164,6 +1299,29 @@ describe('GitHub pull-request data pipeline', () => {
     await client.loadPullRequest(identity);
 
     expect(fetcher).toHaveBeenCalledTimes(6);
+  });
+
+  it('bypasses and replaces a cached summary inside its TTL', async () => {
+    let filesHtml = diffAggregateHtml;
+    const fetcher = vi.fn(async (url: RequestInfo | URL) =>
+      response(String(url).endsWith('/files') ? filesHtml : '<div id="discussion_bucket"></div>', String(url)),
+    );
+    const client = clientFor(fetcher);
+
+    expect((await client.loadPullRequest(identity)).diff).toMatchObject({
+      data: { additions: 1204 },
+      status: 'ready',
+    });
+    filesHtml = currentFilesHtml;
+    expect((await client.loadPullRequest(identity, { bypassCache: true })).diff).toMatchObject({
+      data: { additions: 524 },
+      status: 'ready',
+    });
+    expect((await client.loadPullRequest(identity)).diff).toMatchObject({
+      data: { additions: 524 },
+      status: 'ready',
+    });
+    expect(fetcher).toHaveBeenCalledTimes(4);
   });
 
   it('does not cache a transient request failure', async () => {

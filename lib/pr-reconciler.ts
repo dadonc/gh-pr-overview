@@ -21,6 +21,15 @@ export interface CardProps {
   conversationHref: string;
   filesHref: string;
   summary: PullRequestSummary;
+  onRetry?: () => void;
+  refreshing?: boolean;
+}
+
+const STALE_AFTER_MS = 60_000;
+
+function nativeCount(extraction: PullRequestRowExtraction): number | undefined {
+  return extraction.nativeComments.status === 'ready' ? extraction.nativeComments.count
+    : extraction.nativeComments.status === 'zero' ? 0 : undefined;
 }
 
 export interface MountedCard {
@@ -78,6 +87,10 @@ class RowController {
   private pendingProps: CardProps;
   private readonly authoredAttribute: string | null;
   private started = false;
+  private active = false;
+  private needsReload = false;
+  private completedAt?: number;
+  private lastNativeCount?: number;
   private disposed = false;
   private pendingMountedUiRemoval = false;
 
@@ -91,8 +104,10 @@ class RowController {
     private readonly ownEpoch: number,
     private readonly ignoreOwnedRemoval: (node: Node) => void,
     private readonly requestReconcile: () => void,
+    private readonly requeue: (controller: RowController) => void,
   ) {
     this.currentExtraction = extraction;
+    this.lastNativeCount = nativeCount(extraction);
     this.authoredAttribute = row.getAttribute('data-pr-overview-authored');
     this.mountAnchor = this.createMountAnchor();
     this.pendingProps = this.props(loadingSummary(extraction));
@@ -168,7 +183,13 @@ class RowController {
 
   private props(summary: PullRequestSummary): CardProps {
     const base = `/${this.currentExtraction.identity.owner}/${this.currentExtraction.identity.repository}/pull/${this.currentExtraction.identity.number}`;
-    return { conversationHref: base, filesHref: `${base}/files`, summary };
+    return {
+      conversationHref: base,
+      filesHref: `${base}/files`,
+      summary,
+      onRetry: () => { if (!this.active && !this.needsReload) this.invalidate(); },
+      refreshing: this.active && this.completedAt !== undefined || this.needsReload,
+    };
   }
 
   private refreshExtraction(extraction: PullRequestRowExtraction): void {
@@ -190,7 +211,22 @@ class RowController {
   }
 
   refresh(extraction: PullRequestRowExtraction): void {
+    const nextCount = nativeCount(extraction);
+    const changed = nextCount !== undefined && this.lastNativeCount !== undefined && nextCount !== this.lastNativeCount;
+    this.lastNativeCount = nextCount;
     this.refreshExtraction(extraction);
+    if (changed) this.invalidate();
+  }
+
+  private invalidate(): void {
+    if (this.disposed || this.needsReload) return;
+    this.needsReload = true;
+    this.render(this.props(this.pendingProps.summary));
+    this.requeue(this);
+  }
+
+  refreshIfStale(): void {
+    if (!this.active && this.completedAt !== undefined && Date.now() - this.completedAt >= STALE_AFTER_MS) this.invalidate();
   }
 
   noteMountedUiRemoval(): void {
@@ -198,12 +234,17 @@ class RowController {
   }
 
   async start(): Promise<void> {
-    if (this.started || this.disposed) return;
+    if (this.active || this.disposed || this.started && !this.needsReload) return;
+    const bypassCache = this.needsReload;
+    this.needsReload = false;
     this.started = true;
+    this.active = true;
+    if (bypassCache) this.render(this.props(this.pendingProps.summary));
     const requestedIdentity = this.currentExtraction.identity;
     const requestedKey = identityKey(requestedIdentity);
     const abortController = new AbortController();
     this.abortController = abortController;
+    const updatedSections = new Set<keyof PullRequestRemoteSummary>();
     const matchingExtraction = () => {
       const extraction = extractPullRequestRow(this.row, this.currentExtraction.viewerLogin);
       return extraction && identityKey(extraction.identity) === requestedKey && this.matches(extraction)
@@ -216,6 +257,9 @@ class RowController {
       if (!extraction) return;
       this.currentExtraction = extraction;
       const current = this.pendingProps.summary;
+      for (const key of ['agents', 'diff', 'reviewThreads'] as const) {
+        if (remote[key] && remote[key].status !== 'loading') updatedSections.add(key);
+      }
       this.render(this.props({
         ...current,
         agents: mergeSection(current.agents, remote.agents),
@@ -234,6 +278,7 @@ class RowController {
     };
     try {
       const remote = await this.client.loadPullRequest(requestedIdentity, {
+        bypassCache,
         onUpdate: mergeUpdate,
         signal: abortController.signal,
       });
@@ -245,15 +290,19 @@ class RowController {
       this.currentExtraction = extraction;
       const message = error instanceof Error ? error.message : 'GitHub data could not be loaded.';
       const current = this.pendingProps.summary;
-      const errorSection = <T>(section: SectionState<T>): SectionState<T> =>
-        section.status === 'loading' ? { message, status: 'error' } : section;
+      const errorSection = <T>(key: keyof PullRequestRemoteSummary, section: SectionState<T>): SectionState<T> =>
+        updatedSections.has(key) ? section : { message, status: 'error' };
       this.render(this.props({
         ...current,
-        agents: errorSection(current.agents),
+        agents: errorSection('agents', current.agents),
         authoredByViewer: loadingSummary(extraction).authoredByViewer,
-        diff: errorSection(current.diff),
-        reviewThreads: errorSection(current.reviewThreads),
+        diff: errorSection('diff', current.diff),
+        reviewThreads: errorSection('reviewThreads', current.reviewThreads),
       }));
+    } finally {
+      this.active = false;
+      this.completedAt = Date.now();
+      if (bypassCache && !this.disposed && this.ownEpoch === this.epoch() && !abortController.signal.aborted && matchingExtraction()) this.render(this.props(this.pendingProps.summary));
     }
   }
 
@@ -277,6 +326,7 @@ export function createPageReconciler(options: PageReconcilerOptions) {
   const scheduler = createPrLoadScheduler<RowController>(2);
   const mountedUiDirtyRows = new Set<HTMLElement>();
   const ignoredOwnedRemovals = new WeakSet<Node>();
+  const eligibleRows = new Set<HTMLElement>();
   let currentEpoch = 0;
   let observer: MutationObserver | undefined;
   let queued = false;
@@ -291,7 +341,10 @@ export function createPageReconciler(options: PageReconcilerOptions) {
     ? new options.IntersectionObserver((entries) => {
         scheduler.setOrder(orderedControllers());
         scheduler.updateEligibility(entries.flatMap((entry) => {
+          if (entry.isIntersecting) eligibleRows.add(entry.target as HTMLElement);
+          else eligibleRows.delete(entry.target as HTMLElement);
           const controller = controllers.get(entry.target as HTMLElement);
+          if (entry.isIntersecting && !options.document.hidden) controller?.refreshIfStale();
           return controller ? [{ eligible: entry.isIntersecting, job: controller }] : [];
         }));
       }, { rootMargin: '800px' })
@@ -342,6 +395,7 @@ export function createPageReconciler(options: PageReconcilerOptions) {
       controller.dispose();
     }
     controllers.clear();
+    eligibleRows.clear();
     mountedUiDirtyRows.clear();
   };
   const reconcile = () => {
@@ -369,6 +423,7 @@ export function createPageReconciler(options: PageReconcilerOptions) {
       }
     }
     for (const [row, controller] of staleControllers) {
+      eligibleRows.delete(row);
       intersectionObserver?.unobserve(row);
       controller.dispose();
       controllers.delete(row);
@@ -388,6 +443,7 @@ export function createPageReconciler(options: PageReconcilerOptions) {
         currentEpoch,
         (node) => ignoredOwnedRemovals.add(node),
         queueReconcile,
+        (controller) => scheduler.requeue(controller),
       );
       controllers.set(row, controller);
       scheduler.register(controller, () => controller.start());
@@ -400,9 +456,22 @@ export function createPageReconciler(options: PageReconcilerOptions) {
     }
     mountedUiDirtyRows.clear();
   };
+  const refreshStale = () => {
+    if (stopped || options.document.hidden || !isPullRequestListRoute(options.document.location)) return;
+    for (const [row, controller] of controllers) {
+      if (!intersectionObserver || eligibleRows.has(row)) controller.refreshIfStale();
+    }
+  };
+  const window = options.document.defaultView;
+  window?.addEventListener('focus', refreshStale);
+  options.document.addEventListener('visibilitychange', refreshStale);
+  const refreshTimer = window?.setInterval(refreshStale, STALE_AFTER_MS);
   return {
     cleanup() {
       stopped = true;
+      window?.clearInterval(refreshTimer);
+      window?.removeEventListener('focus', refreshStale);
+      options.document.removeEventListener('visibilitychange', refreshStale);
       observer?.disconnect();
       observer = undefined;
       intersectionObserver?.disconnect();

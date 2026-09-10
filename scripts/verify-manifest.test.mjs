@@ -26,7 +26,7 @@ const expectedManifest = {
     {
       all_frames: false,
       js: ['content-scripts/content.js'],
-      matches: ['https://github.com/*/*/pulls*'],
+      matches: ['https://github.com/*'],
       run_at: 'document_idle',
       world: 'ISOLATED',
     },
@@ -151,7 +151,7 @@ describe('validateManifest', () => {
   it('rejects extra content scripts and broader match patterns', () => {
     const broadContentScript = {
       ...expectedManifest.content_scripts[0],
-      matches: ['https://github.com/*'],
+      matches: ['https://*/*'],
     };
 
     expect(validateManifest({
@@ -159,7 +159,7 @@ describe('validateManifest', () => {
       content_scripts: [expectedManifest.content_scripts[0], broadContentScript],
     })).toEqual([
       'Expected exactly one content script',
-      'Content script matches must be exactly https://github.com/*/*/pulls*',
+      'Content script matches must be exactly https://github.com/*',
     ]);
   });
 

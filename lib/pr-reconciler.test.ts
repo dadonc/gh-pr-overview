@@ -1169,7 +1169,8 @@ describe('page reconciler', () => {
     expect(
       rows.reduce((total, row) => total + rowQuerySpies.get(row)!.mock.calls.length, 0),
     ).toBeLessThan(120);
-    expect(client.loadPullRequest.mock.calls.filter(([identity]) => identity.number === 15)).toHaveLength(1);
+    expect(client.loadPullRequest.mock.calls.filter(([identity]) => identity.number === 15)).toHaveLength(2);
+    reconciler.cleanup();
   });
 
   it('leaves the native counter untouched while mounting, loading, and cleaning up', async () => {
@@ -1894,7 +1895,7 @@ describe('page reconciler', () => {
     }
   });
 
-  it('accepts a pending remote summary after a same-identity native count update', async () => {
+  it('keeps a pending summary visible and schedules fresh data after a same-identity native count update', async () => {
     const document = page(row());
     let resolve!: (value: PullRequestRemoteSummary) => void;
     const client = {
@@ -1924,8 +1925,9 @@ describe('page reconciler', () => {
     const native = document.querySelector<HTMLAnchorElement>('.comments-link')!;
     expect(native.getAttribute('aria-label')).toBe('24 comments');
     expect(native.hidden).toBe(false);
-    expect(client.loadPullRequest).toHaveBeenCalledOnce();
+    expect(client.loadPullRequest).toHaveBeenCalledTimes(2);
     expect(removed).not.toHaveBeenCalled();
+    reconciler.cleanup();
   });
 
   it('reconciles inserted and removed rows idempotently, falls back to immediate loads, and ignores stale aborted results', async () => {

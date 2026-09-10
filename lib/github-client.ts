@@ -21,6 +21,7 @@ import {
 
 const CACHE_TTL_MS = 60_000;
 const MAX_TIMELINE_FRAGMENTS = 20;
+const REQUEST_TIMEOUT_MS = 15_000;
 
 export type { PullRequestIdentity } from './domain';
 export { isValidPullRequestIdentity } from './github-url';
@@ -42,6 +43,7 @@ export type PullRequestRemoteUpdate =
   | { kind: 'complete'; summary: PullRequestRemoteSummary };
 
 export interface PullRequestLoadOptions {
+  bypassCache?: boolean;
   onUpdate?: (update: PullRequestRemoteUpdate) => void;
   signal?: AbortSignal;
 }
@@ -277,24 +279,54 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
     if (!isAllowedPullRequestUrl(target, identity, kind)) throw new Error('GitHub URL was not allowed.');
     if (signal?.aborted) throw abortError();
     return limiter.run(signal, async () => {
+      const requestController = new AbortController();
+      let timedOut = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let rejectCancellation: ((reason: Error) => void) | undefined;
+      const cancelRequest = () => {
+        requestController.abort();
+        rejectCancellation?.(abortError());
+      };
+      signal?.addEventListener('abort', cancelRequest, { once: true });
+      const deadline = new Promise<never>((_resolve, reject) => {
+        rejectCancellation = reject;
+        timer = setTimeout(() => {
+          timedOut = true;
+          requestController.abort();
+          reject(new Error('GitHub request timed out.'));
+        }, REQUEST_TIMEOUT_MS);
+      });
       const request: RequestInit = {
         credentials: 'same-origin',
         method: 'GET',
         redirect: kind === 'fragment' ? 'error' : 'follow',
-        signal,
+        signal: requestController.signal,
       };
       if (headers) request.headers = headers;
-      const response = await fetcher(target, request);
-      const finalUrl = response.url || target;
-      if (kind === 'fragment' && response.url !== target) throw new Error('GitHub redirected to an untrusted URL.');
-      if (!isAllowedPullRequestUrl(finalUrl, identity, kind)) throw new Error('GitHub redirected to an untrusted URL.');
-      if (response.status === 401 || response.status === 403) throw new Error('GitHub access was denied.');
-      if (!response.ok) throw new Error(`GitHub request failed (${response.status}).`);
-      const contentType = response.headers.get('content-type') ?? '';
-      if (!/^text\/html(?:;|$)/i.test(contentType)) throw new Error('GitHub did not return HTML.');
-      const document = parseDocument(await response.text());
-      if (isAuthenticationDocument(document)) throw new Error('GitHub access was denied.');
-      return document;
+      const networkRequest = async () => {
+        const response = await fetcher(target, request);
+        const finalUrl = response.url || target;
+        if (kind === 'fragment' && response.url !== target) throw new Error('GitHub redirected to an untrusted URL.');
+        if (!isAllowedPullRequestUrl(finalUrl, identity, kind)) throw new Error('GitHub redirected to an untrusted URL.');
+        if (response.status === 401 || response.status === 403) throw new Error('GitHub access was denied.');
+        if (!response.ok) throw new Error(`GitHub request failed (${response.status}).`);
+        const contentType = response.headers.get('content-type') ?? '';
+        if (!/^text\/html(?:;|$)/i.test(contentType)) throw new Error('GitHub did not return HTML.');
+        const document = parseDocument(await response.text());
+        if (isAuthenticationDocument(document)) throw new Error('GitHub access was denied.');
+        return document;
+      };
+      try {
+        return await Promise.race([networkRequest(), deadline]);
+      } catch (error) {
+        if (signal?.aborted) throw abortError();
+        if (timedOut) throw new Error('GitHub request timed out.');
+        throw error;
+      } finally {
+        requestController.abort();
+        if (timer !== undefined) clearTimeout(timer);
+        signal?.removeEventListener('abort', cancelRequest);
+      }
     });
   };
 
@@ -444,8 +476,9 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
       return summary;
     }
     const key = cacheKey(identity);
+    if (loadOptions?.bypassCache) cache.delete(key);
     const cached = cache.get(key);
-    if (cached && cached.expiresAt > clock()) {
+    if (!loadOptions?.bypassCache && cached && cached.expiresAt > clock()) {
       publish(loadOptions, { kind: 'complete', summary: cached.summary });
       return cached.summary;
     }

@@ -1,5 +1,5 @@
 import type { PullRequestClient, CardUiFactory, ObserverConstructor } from './pr-reconciler';
-import { createPageReconciler } from './pr-reconciler';
+import { createPageReconciler, isPullRequestListRoute } from './pr-reconciler';
 
 export interface WxtLocationChangeEvent extends Event {
   readonly newUrl: URL;
@@ -33,16 +33,16 @@ export function startContentRuntime(options: ContentRuntimeOptions): ContentRunt
   const document = options.document ?? globalThis.document;
   let reconciler: ReturnType<typeof createPageReconciler> | undefined;
   let invalidated = false;
+  let enabled = options.initiallyEnabled ?? true;
 
-  const setEnabled = (enabled: boolean) => {
+  const reconcileRoute = () => {
     if (invalidated) return;
-    if (!enabled) {
+    if (!enabled || !isPullRequestListRoute(document.location)) {
       reconciler?.cleanup();
       reconciler = undefined;
       return;
     }
-    if (reconciler) return;
-    reconciler = createPageReconciler({
+    reconciler ??= createPageReconciler({
       document,
       client: options.client,
       IntersectionObserver: options.IntersectionObserver ?? globalThis.IntersectionObserver as ObserverConstructor | undefined,
@@ -51,7 +51,12 @@ export function startContentRuntime(options: ContentRuntimeOptions): ContentRunt
     reconciler.reconcile();
   };
 
-  setEnabled(options.initiallyEnabled ?? true);
+  const setEnabled = (next: boolean) => {
+    if (invalidated || next === enabled) return;
+    enabled = next;
+    reconcileRoute();
+  };
+  reconcileRoute();
   let pendingUrl: URL | undefined;
   let framePending = false;
   const scheduleCommittedReconcile = (newUrl: URL) => {
@@ -61,11 +66,11 @@ export function startContentRuntime(options: ContentRuntimeOptions): ContentRunt
     options.ctx.requestAnimationFrame(() => {
       framePending = false;
       const expected = pendingUrl;
-      if (!invalidated && expected && document.location.href === expected.href) reconciler?.reconcile();
+      if (!invalidated && expected && document.location.href === expected.href) reconcileRoute();
     });
   };
   options.ctx.addEventListener(window, 'wxt:locationchange', (event) => {
-    if (reconciler) scheduleCommittedReconcile(event.newUrl);
+    if (enabled) scheduleCommittedReconcile(event.newUrl);
   });
   options.ctx.onInvalidated(() => {
     invalidated = true;

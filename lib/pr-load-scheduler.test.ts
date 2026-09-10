@@ -18,6 +18,26 @@ async function settleScheduler() {
 }
 
 describe('PR load scheduler', () => {
+  it('coalesces active invalidations and waits for eligibility before reloading', async () => {
+    const scheduler = createPrLoadScheduler<number>(1);
+    const started: number[] = [];
+    const first = deferred();
+    scheduler.register(1, () => { started.push(1); return started.length === 1 ? first.promise : Promise.resolve(); });
+    scheduler.updateEligibility([{ job: 1, eligible: true }]);
+    scheduler.requeue(1);
+    scheduler.requeue(1);
+    scheduler.updateEligibility([{ job: 1, eligible: false }]);
+    first.resolve();
+    await settleScheduler();
+    expect(started).toEqual([1]);
+    scheduler.updateEligibility([{ job: 1, eligible: true }]);
+    await settleScheduler();
+    expect(started).toEqual([1, 1]);
+    scheduler.requeue(1);
+    await settleScheduler();
+    expect(started).toEqual([1, 1, 1]);
+  });
+
   it('does not let bottom-up eligibility consume the two-job window before top-first ordering', async () => {
     const scheduler = createPrLoadScheduler<number>(2);
     const started: number[] = [];

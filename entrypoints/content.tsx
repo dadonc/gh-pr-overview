@@ -12,7 +12,7 @@ import { CARD_STYLES, PullRequestCard } from '../lib/pr-card';
 
 export default defineContentScript({
   allFrames: false,
-  matches: ['https://github.com/*/*/pulls*'],
+  matches: ['https://github.com/*'],
   runAt: 'document_idle',
   world: 'ISOLATED',
   async main(ctx) {

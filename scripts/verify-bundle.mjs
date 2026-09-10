@@ -22,7 +22,8 @@ const ALLOWED_FILE_SET = new Set(ALLOWED_FILES);
 const ALLOWED_DIRECTORIES = new Set(['content-scripts', 'icon', 'icon/disabled']);
 const CONTENT_SCRIPT_FILE = 'content-scripts/content.js';
 const MAX_CONTENT_SCRIPT_BYTES = 250_000;
-const MAX_BUNDLE_BYTES = 270_000;
+// Allow the existing 250 kB script budget plus the packaged icons and worker.
+const MAX_BUNDLE_BYTES = 275_000;
 const typedArrayByteLength = Object.getOwnPropertyDescriptor(
   Object.getPrototypeOf(Uint8Array.prototype),
   'byteLength',

@@ -152,10 +152,10 @@ describe('validateBundle', () => {
     }))).toEqual(['Content script size does not match payload: recorded 1, actual 2']);
   });
 
-  it('rejects a Chrome package larger than 270,000 bytes', () => {
+  it('rejects a Chrome package larger than 275,000 bytes', () => {
     expect(validateBundle(validBundle({
-      sizes: [1, 270_000, ...ALLOWED_FILES.slice(2).map(() => 0)],
-    }))).toEqual(['Chrome bundle exceeds 270000 bytes: 270001']);
+      sizes: [1, 275_000, ...ALLOWED_FILES.slice(2).map(() => 0)],
+    }))).toEqual(['Chrome bundle exceeds 275000 bytes: 275001']);
   });
 
   it('rejects a bundle total that overflows a safe integer', () => {
@@ -167,7 +167,7 @@ describe('validateBundle', () => {
   it('accepts content and total sizes at their exact byte limits', () => {
     expect(validateBundle(validBundle({
       contentScript: Buffer.alloc(250_000),
-      sizes: [250_000, 20_000, ...ALLOWED_FILES.slice(2).map(() => 0)],
+      sizes: [250_000, 25_000, ...ALLOWED_FILES.slice(2).map(() => 0)],
     }))).toEqual([]);
   });
 
@@ -179,8 +179,8 @@ describe('validateBundle', () => {
 
     expect(validateBundle(validBundle({
       contentScript: Buffer.alloc(250_000),
-      sizes: [250_000, 20_001, ...ALLOWED_FILES.slice(2).map(() => 0)],
-    }))).toEqual(['Chrome bundle exceeds 270000 bytes: 270001']);
+      sizes: [250_000, 25_001, ...ALLOWED_FILES.slice(2).map(() => 0)],
+    }))).toEqual(['Chrome bundle exceeds 275000 bytes: 275001']);
   });
 
   it('normalizes portable paths but rejects duplicate normalized files', () => {

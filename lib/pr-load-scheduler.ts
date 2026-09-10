@@ -4,6 +4,8 @@ interface ScheduledJob<Job> {
   readonly job: Job;
   readonly run: () => Promise<void>;
   readonly registrationOrder: number;
+  eligible: boolean;
+  rerun: boolean;
   slotHeld: boolean;
   state: JobState;
 }
@@ -41,7 +43,8 @@ export function createPrLoadScheduler<Job>(maximumActive: number) {
 
   function complete(entry: ScheduledJob<Job>) {
     if (jobs.get(entry.job) !== entry || entry.state !== 'active') return;
-    entry.state = 'completed';
+    entry.state = entry.rerun ? (entry.eligible ? 'queued' : 'registered') : 'completed';
+    entry.rerun = false;
     release(entry);
   }
 
@@ -55,7 +58,15 @@ export function createPrLoadScheduler<Job>(maximumActive: number) {
   return {
     register(job: Job, run: () => Promise<void>) {
       if (jobs.has(job)) return;
-      jobs.set(job, { job, run, registrationOrder: nextRegistrationOrder++, slotHeld: false, state: 'registered' });
+      jobs.set(job, { job, run, registrationOrder: nextRegistrationOrder++, eligible: false, rerun: false, slotHeld: false, state: 'registered' });
+    },
+
+    requeue(job: Job) {
+      const entry = jobs.get(job);
+      if (!entry) return;
+      if (entry.state === 'active') entry.rerun = true;
+      else entry.state = entry.eligible ? 'queued' : 'registered';
+      drain();
     },
 
     unregister(job: Job) {
@@ -76,7 +87,9 @@ export function createPrLoadScheduler<Job>(maximumActive: number) {
     updateEligibility(updates: readonly { job: Job; eligible: boolean }[]) {
       for (const { job, eligible } of updates) {
         const entry = jobs.get(job);
-        if (!entry || entry.state === 'active' || entry.state === 'completed') continue;
+        if (!entry) continue;
+        entry.eligible = eligible;
+        if (entry.state === 'active' || entry.state === 'completed') continue;
         entry.state = eligible ? 'queued' : 'registered';
       }
       drain();

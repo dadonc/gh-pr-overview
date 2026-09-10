@@ -45,6 +45,24 @@ function startRuntime(initiallyEnabled = true) {
 }
 
 describe('content runtime', () => {
+  it('stays dormant off-route and starts after committed navigation into a PR list', async () => {
+    setupPage('/octo/demo/pull/42');
+    const observe = vi.spyOn(MutationObserver.prototype, 'observe');
+    const runtime = startRuntime();
+    try {
+      expect(observe).not.toHaveBeenCalled();
+      expect(runtime.mount).not.toHaveBeenCalled();
+      runtime.listeners.get('wxt:locationchange')!(locationChange('/octo/demo/pulls'));
+      window.history.replaceState({}, '', '/octo/demo/pulls');
+      runtime.frames.shift()!(0);
+      await Promise.resolve();
+      expect(runtime.mount).toHaveBeenCalledTimes(1);
+    } finally {
+      runtime.invalidate();
+      observe.mockRestore();
+    }
+  });
+
   it('starts dormant and activates without a reload', async () => {
     setupPage();
     const runtime = startRuntime(false);

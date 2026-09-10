@@ -233,12 +233,12 @@ it('renders the real content entrypoint and never mutates the native counter', a
 
   await definition.main(context.value);
 
-  expect(definition.matches).toEqual(['https://github.com/*/*/pulls*']);
+  expect(definition.matches).toEqual(['https://github.com/*']);
   expect(wxtBoundary.options?.css).toBe(CARD_STYLES);
   expect(wxtBoundary.options).not.toHaveProperty('cssInjectionMode');
 
   await waitFor(() => {
-    expect(renderedOverviewLine()).toBe('0 unresolved · −353/+524 · 18 files · Copilot 1');
+    expect(renderedOverviewLine()).toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1 · Retry');
   });
   expect(warn).toHaveBeenCalledTimes(1);
   expect(warn).toHaveBeenCalledWith(
@@ -313,10 +313,10 @@ it('applies storage toggles immediately without navigating or leaking its listen
   await loadContentEntrypoint(fetcher);
   await definition.main(context.value);
   await waitFor(() => {
-    expect(renderedOverviewLine()).toBe('0 unresolved · −353/+524 · 18 files · Copilot 1');
+    expect(renderedOverviewLine()).toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1 · Retry');
   });
   const href = window.location.href;
-  const firstCycleSignals = fetcher.mock.calls.map(([, init]) => init?.signal as AbortSignal);
+  const requestsBeforeDisable = fetcher.mock.calls.length;
 
   act(() => {
     for (const listener of storageListeners) {
@@ -326,8 +326,7 @@ it('applies storage toggles immediately without navigating or leaking its listen
   await waitFor(() => {
     expect(document.querySelector('github-pr-overview')).toBeNull();
   });
-  expect(firstCycleSignals).not.toHaveLength(0);
-  expect(firstCycleSignals.every((signal) => signal.aborted)).toBe(true);
+  expect(fetcher).toHaveBeenCalledTimes(requestsBeforeDisable);
 
   act(() => {
     for (const listener of storageListeners) {
@@ -425,7 +424,7 @@ it('renders the completed diff before timeline loading finishes', async () => {
     conversation.resolve(response(currentConversationHtml, 'https://github.com/octo/demo/pull/42'));
   });
   await waitFor(() => {
-    expect(renderedOverviewLine()).toBe('0 unresolved · −353/+524 · 18 files · Copilot 1');
+    expect(renderedOverviewLine()).toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1 · Retry');
   });
 });
 

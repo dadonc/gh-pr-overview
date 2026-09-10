@@ -14,6 +14,10 @@ export const CARD_STYLES = `
 .deletions { color: var(--fgColor-danger, var(--color-danger-fg, #d1242f)); }
 .additions { color: var(--fgColor-success, var(--color-success-fg, #1a7f37)); }
 .agent { color: var(--fgColor-default, #1f2328); }
+.retry { flex: 0 0 auto; border: 0; padding: 0; color: var(--fgColor-accent, #0969da); background: transparent; font: inherit; cursor: pointer; }
+.retry:hover { text-decoration: underline; }
+.retry:focus-visible { outline: 2px solid var(--focus-outlineColor, #0969da); outline-offset: 2px; border-radius: 2px; }
+.retry:disabled { color: var(--fgColor-muted, #59636e); cursor: default; text-decoration: none; }
 .separator { color: var(--fgColor-muted, #59636e); margin-inline: 5px; user-select: none; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (prefers-color-scheme: dark) { .pr-overview-card { color: var(--fgColor-default, #f0f6fc); background: var(--bgColor-default, #0d1117); border-color: var(--borderColor-muted, #30363d); } .deletions { color: var(--fgColor-danger, var(--color-danger-fg, #f85149)); } .additions { color: var(--fgColor-success, var(--color-success-fg, #3fb950)); } .agent { color: var(--fgColor-default, #f0f6fc); } }
@@ -23,6 +27,8 @@ export const CARD_STYLES = `
 export interface PullRequestCardProps {
   conversationHref: string;
   filesHref: string;
+  onRetry?: () => void;
+  refreshing?: boolean;
   summary: PullRequestSummary;
 }
 
@@ -30,9 +36,9 @@ function sectionTitle<T>(section: SectionState<T>): string | undefined {
   return section.status === 'error' ? section.message : section.status === 'partial' ? section.reason : undefined;
 }
 
-function agentLabel(agent: AgentParticipation): string {
+function agentLabel(agent: AgentParticipation, partial: boolean): string {
   const name = AI_AGENT_REGISTRY.find((candidate) => candidate.id === agent.agentId)?.label ?? agent.agentId;
-  return `${name} ${agent.responseCount}`;
+  return `${name} ${partial ? '≥' : ''}${agent.responseCount}`;
 }
 
 function agentTitle(agent: AgentParticipation): string {
@@ -63,7 +69,7 @@ function ReviewThreads({ href, section }: { href: string; section: PullRequestSu
   if (section.status === 'error') return <><span className="metric" title={section.message} aria-describedby={descriptionId}>— unresolved</span><Description id={descriptionId}>{section.message}</Description></>;
   const accessibleLabel = `${section.status === 'partial' ? 'At least ' : ''}${countLabel(section.data.unresolved, 'unresolved review thread')}`;
   const className = `metric${section.data.unresolved > 0 ? ' unresolved' : ''}`;
-  return <><a className={className} href={href} title={sectionTitle(section)} aria-label={accessibleLabel} aria-describedby={section.status === 'partial' ? descriptionId : undefined}>{section.data.unresolved} unresolved</a>{section.status === 'partial' && <Description id={descriptionId}>Lower-bound unresolved review threads: {section.reason}</Description>}</>;
+  return <><a className={className} href={href} title={sectionTitle(section)} aria-label={accessibleLabel} aria-describedby={section.status === 'partial' ? descriptionId : undefined}>{section.status === 'partial' ? '≥' : ''}{section.data.unresolved} unresolved</a>{section.status === 'partial' && <Description id={descriptionId}>Lower-bound unresolved review threads: {section.reason}</Description>}</>;
 }
 
 function Diff({ href, section }: { href: string; section: PullRequestSummary['diff'] }) {
@@ -89,17 +95,20 @@ function Agents({ section }: { section: PullRequestSummary['agents'] }) {
     const id = `${descriptionId}-${agent.agentId}`;
     return <Fragment key={agent.agentId}>
       {index > 0 && <Separator />}
-      <span className="agent" title={title} aria-describedby={id}>{agentLabel(agent)}<Description id={id}>{title}</Description></span>
+      <span className="agent" title={title} aria-describedby={id}>{agentLabel(agent, section.status === 'partial')}<Description id={id}>{title}</Description></span>
     </Fragment>;
   })}</>;
 }
 
-export function PullRequestCard({ conversationHref, filesHref, summary }: PullRequestCardProps) {
-  const busy = [
+export function PullRequestCard({ conversationHref, filesHref, onRetry, refreshing = false, summary }: PullRequestCardProps) {
+  const sections = [
     summary.reviewThreads,
     summary.diff,
     summary.agents,
-  ].some((section) => section.status === 'loading');
+  ];
+  const loading = sections.some((section) => section.status === 'loading');
+  const busy = refreshing || loading;
+  const canRetry = sections.some((section) => section.status === 'partial' || section.status === 'error');
 
   return <div className={`pr-overview-card${summary.authoredByViewer ? ' authored' : ''}`} data-testid="pr-card" role="group" aria-label="Pull request review overview" aria-busy={busy}>
     <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
@@ -111,5 +120,6 @@ export function PullRequestCard({ conversationHref, filesHref, summary }: PullRe
     <Diff section={summary.diff} href={filesHref} />
     <Separator />
     <Agents section={summary.agents} />
+    {canRetry && onRetry && <><Separator /><button className="retry" type="button" onClick={onRetry} disabled={busy} aria-label="Retry pull request overview">Retry</button></>}
   </div>;
 }

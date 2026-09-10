@@ -80,7 +80,7 @@ describe('PullRequestCard', () => {
       agents: { status: 'loading' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
-    expect(visibleCardText()).toBe('2 unresolved · −81+/+340+ · 12+ files · Loading agents…');
+    expect(visibleCardText()).toBe('≥2 unresolved · −81+/+340+ · 12+ files · Loading agents…');
     expect(screen.getByRole('link', { name: 'At least 2 unresolved review threads' })).toHaveAttribute('title', 'More content is loading.');
     expect(screen.getByRole('link', { name: 'At least 81 deletions, 340 additions, 12 files changed' })).toHaveAttribute('title', 'Collapsed files.');
     expect(screen.getByLabelText('Loading AI agents')).toBeVisible();
@@ -118,7 +118,7 @@ describe('PullRequestCard', () => {
       agents: { data: [], reason: 'timeline is incomplete', status: 'partial' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
-    expect(visibleCardText()).toBe('0 unresolved · −81/+340 · 12 files · No AI agents detected yet');
+    expect(visibleCardText()).toBe('≥0 unresolved · −81/+340 · 12 files · No AI agents detected yet');
     const unresolved = screen.getByRole('link', { name: 'At least 0 unresolved review threads' });
     expect(unresolved).toHaveAttribute('aria-describedby');
     expect(unresolved).not.toHaveClass('unresolved');
@@ -130,21 +130,54 @@ describe('PullRequestCard', () => {
     render(<PullRequestCard summary={{
       ...ready,
       agents: { data: [
-        { agentId: 'codex', responseCount: 3, requestSources: ['formal-review-request'], state: 'responded' },
+        { agentId: 'codex', responseCount: 1, requestSources: ['formal-review-request'], state: 'responded' },
       ], reason: 'Some timeline fragments were unavailable.', status: 'partial' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
-    const agent = screen.getByText('Codex 3');
+    const agent = screen.getByText('Codex ≥1');
     expect(agent).toHaveAttribute('aria-describedby');
     expect(agent).toHaveAttribute(
       'title',
-      'Responded after a formal review request. At least 3 responses detected. Partial agent data: Some timeline fragments were unavailable.',
+      'Responded after a formal review request. At least 1 response detected. Partial agent data: Some timeline fragments were unavailable.',
     );
     expect(agent).not.toHaveTextContent('+');
     expect(screen.getByText(
-      /At least 3 responses detected\. Partial agent data: Some timeline fragments were unavailable\./,
+      /At least 1 response detected\. Partial agent data: Some timeline fragments were unavailable\./,
       { selector: '.sr-only' },
     )).toBeInTheDocument();
+  });
+
+  it('offers one accessible retry for partial or error data and invokes its handler once', async () => {
+    const onRetry = vi.fn();
+    const { rerender } = render(<PullRequestCard summary={{
+      ...ready,
+      reviewThreads: { data: { total: 8, unresolved: 0, resolvedOrOutdated: 6 }, reason: 'timeline is incomplete', status: 'partial' },
+    }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" onRetry={onRetry} />);
+
+    const retry = screen.getByRole('button', { name: 'Retry pull request overview' });
+    retry.click();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+
+    rerender(<PullRequestCard summary={{ ...ready, agents: { message: 'agents failed', status: 'error' } }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" onRetry={onRetry} />);
+    expect(screen.getByRole('button', { name: 'Retry pull request overview' })).toBeVisible();
+
+    rerender(<PullRequestCard summary={ready} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" onRetry={onRetry} />);
+    expect(screen.queryByRole('button', { name: 'Retry pull request overview' })).not.toBeInTheDocument();
+  });
+
+  it('marks refreshes busy and disables retry during refresh or section loading', () => {
+    const onRetry = vi.fn();
+    const partial: PullRequestSummary = {
+      ...ready,
+      agents: { data: ready.agents.status === 'ready' ? ready.agents.data : [], reason: 'timeline is incomplete', status: 'partial' },
+    };
+    const { rerender } = render(<PullRequestCard summary={partial} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" onRetry={onRetry} refreshing />);
+
+    expect(screen.getByTestId('pr-card')).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByRole('button', { name: 'Retry pull request overview' })).toBeDisabled();
+
+    rerender(<PullRequestCard summary={{ ...partial, diff: { status: 'loading' } }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" onRetry={onRetry} />);
+    expect(screen.getByRole('button', { name: 'Retry pull request overview' })).toBeDisabled();
   });
 
   it.each([

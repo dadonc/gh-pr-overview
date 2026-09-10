@@ -143,7 +143,7 @@ export function normalizeAgentAccountLogin(
   const loginFromPath = login.trim().match(/(?:^|\/)(?:apps|users)\/([^/?#]+)/i)?.[1];
   const normalizedLogin = (loginFromPath ?? login)
     .trim()
-    .split(/[/?#]/, 1)[0]
+    .split(/[/?#]/, 1)[0]!
     .replace(/\[bot\]$/i, '')
     .toLowerCase();
 

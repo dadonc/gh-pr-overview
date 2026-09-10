@@ -2,9 +2,9 @@
 
 GitHub PR Overview is a read-only Chrome extension that adds a compact review
 summary to repository pull-request lists while preserving GitHub's native
-right-side comment counter. It runs on URLs matching
-`https://github.com/*/*/pulls*`. Both the classic and redesigned GitHub PR lists
-are supported.
+right-side comment counter. It shows summaries on repository `/owner/repo/pulls`
+pages, including when reached through GitHub's navigation without a full reload.
+Both the classic and redesigned GitHub PR lists are supported.
 
 ## Toolbar control
 
@@ -24,6 +24,21 @@ the choice persists across browser restarts and extension updates.
   `Name responseCount`, including a zero count when an agent was requested but
   has not responded.
 - A subtle marker for pull requests authored by the signed-in viewer.
+
+Incomplete thread and agent counts use `≥`, for example `≥0 unresolved` or
+`Codex ≥1`, so missing conversation data is visible without hovering. Partial
+diff counts retain their `+` suffix. Hovering explains what GitHub omitted.
+
+Visible rows are checked every minute and when the tab regains focus or becomes
+visible. Summaries older than 60 seconds refresh; a native comment-count change
+also requests fresh data. Existing counts stay visible while refreshing, and
+offscreen rows wait until they are near the viewport. A **Retry** button on
+partial or failed summaries bypasses the cache. It is disabled while loading.
+
+Each request has a 15-second deadline covering both response headers and body
+download. A timeout displays a recoverable error and releases its request slot
+so subsequent rows can load. Disabling the extension or leaving the list
+cancels work and removes refresh timers and listeners.
 
 The extension overview stays on one line, with its metrics separated by `·`.
 When the available row is narrower than the summary, the card scrolls
@@ -50,7 +65,9 @@ The extension:
 - keeps its 60-second summary cache in memory only;
 - stores one local `enabled` boolean and no GitHub data; and
 - declares only the `storage` permission, used for that preference. Its only
-  site access is the path-scoped GitHub content script listed above; it declares
+  site access is `https://github.com/*`, allowing the route watcher to activate
+  after navigation from another GitHub page. Outside repository PR lists it
+  does not mount cards, observe page mutations, or fetch PR data. It declares
   no `host_permissions`.
 
 The content script parses fetched documents with `DOMParser`. Fetched HTML is
@@ -76,6 +93,9 @@ Automated fixtures cannot prove them:
 - Scrolling starts eligible pending rows from the top of the list.
 - A completed diff section appears while review-thread and agent sections are still loading.
 - Filtering, Turbo navigation, dynamic rows, and route exit work.
+- Entering a PR list from a repository or conversation page activates without reload.
+- Stale rows refresh on focus, native count changes revalidate, and Retry recovers failures.
+- Slow requests time out without preventing later rows from loading.
 - Native counters remain untouched through Turbo navigation, route exit, and extension disable.
 - A pinned toolbar click disables and re-enables the extension without opening a popup.
 - All open matching GitHub tabs update immediately without reload.
@@ -89,7 +109,8 @@ Automated fixtures cannot prove them:
 
 ## Develop and test
 
-Requirements: a current Node.js release and npm.
+Requirements: Node.js 22.12+ within the 22.x line, or Node.js 24+, and npm.
+Verification uses Node.js 24.15.0.
 
 ```sh
 npm ci
@@ -101,7 +122,7 @@ npm run verify:manifest
 
 `npm run build` creates the unpacked Chrome Manifest V3 extension in
 `output/chrome-mv3`. The manifest verifier checks that the build contains only
-exactly one path-scoped GitHub content script, one popup-free action, one module
+exactly one GitHub-only content script, one popup-free action, one module
 service worker, and the `storage` permission while rejecting host permissions
 and web-accessible resources.
 

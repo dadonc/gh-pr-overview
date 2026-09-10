@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
-const EXPECTED_MATCH = 'https://github.com/*/*/pulls*';
+const EXPECTED_MATCH = 'https://github.com/*';
 const EXPECTED_NAME = 'GitHub PR Overview';
 const EXPECTED_ICONS = {
   16: 'icon/16.png',
