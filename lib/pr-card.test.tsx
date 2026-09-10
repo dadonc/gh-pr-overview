@@ -80,7 +80,7 @@ describe('PullRequestCard', () => {
       agents: { status: 'loading' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
-    expect(visibleCardText()).toBe('≥2 unresolved · −81+/+340+ · 12+ files · Loading agents…');
+    expect(visibleCardText()).toBe('2 unresolved · −81+/+340+ · 12+ files · Loading agents…');
     expect(screen.getByRole('link', { name: 'At least 2 unresolved review threads' })).toHaveAttribute('title', 'More content is loading.');
     expect(screen.getByRole('link', { name: 'At least 81 deletions, 340 additions, 12 files changed' })).toHaveAttribute('title', 'Collapsed files.');
     expect(screen.getByLabelText('Loading AI agents')).toBeVisible();
@@ -111,14 +111,14 @@ describe('PullRequestCard', () => {
     }
   });
 
-  it('marks partial metrics as lower bounds and never treats partial empty agents as definitive', () => {
+  it('shows plain partial counts with accessible lower-bound explanations and nondefinitive empty agents', () => {
     render(<PullRequestCard summary={{
       ...ready,
       reviewThreads: { data: { total: 8, unresolved: 0, resolvedOrOutdated: 6 }, reason: 'timeline is incomplete', status: 'partial' },
       agents: { data: [], reason: 'timeline is incomplete', status: 'partial' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
-    expect(visibleCardText()).toBe('≥0 unresolved · −81/+340 · 12 files · No AI agents detected yet');
+    expect(visibleCardText()).toBe('0 unresolved · −81/+340 · 12 files · No AI agents detected yet');
     const unresolved = screen.getByRole('link', { name: 'At least 0 unresolved review threads' });
     expect(unresolved).toHaveAttribute('aria-describedby');
     expect(unresolved).not.toHaveClass('unresolved');
@@ -134,7 +134,7 @@ describe('PullRequestCard', () => {
       ], reason: 'Some timeline fragments were unavailable.', status: 'partial' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" />);
 
-    const agent = screen.getByText('Codex ≥1');
+    const agent = screen.getByText('Codex 1');
     expect(agent).toHaveAttribute('aria-describedby');
     expect(agent).toHaveAttribute(
       'title',

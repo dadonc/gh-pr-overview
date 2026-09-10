@@ -36,9 +36,9 @@ function sectionTitle<T>(section: SectionState<T>): string | undefined {
   return section.status === 'error' ? section.message : section.status === 'partial' ? section.reason : undefined;
 }
 
-function agentLabel(agent: AgentParticipation, partial: boolean): string {
+function agentLabel(agent: AgentParticipation): string {
   const name = AI_AGENT_REGISTRY.find((candidate) => candidate.id === agent.agentId)?.label ?? agent.agentId;
-  return `${name} ${partial ? '≥' : ''}${agent.responseCount}`;
+  return `${name} ${agent.responseCount}`;
 }
 
 function agentTitle(agent: AgentParticipation): string {
@@ -69,7 +69,7 @@ function ReviewThreads({ href, section }: { href: string; section: PullRequestSu
   if (section.status === 'error') return <><span className="metric" title={section.message} aria-describedby={descriptionId}>— unresolved</span><Description id={descriptionId}>{section.message}</Description></>;
   const accessibleLabel = `${section.status === 'partial' ? 'At least ' : ''}${countLabel(section.data.unresolved, 'unresolved review thread')}`;
   const className = `metric${section.data.unresolved > 0 ? ' unresolved' : ''}`;
-  return <><a className={className} href={href} title={sectionTitle(section)} aria-label={accessibleLabel} aria-describedby={section.status === 'partial' ? descriptionId : undefined}>{section.status === 'partial' ? '≥' : ''}{section.data.unresolved} unresolved</a>{section.status === 'partial' && <Description id={descriptionId}>Lower-bound unresolved review threads: {section.reason}</Description>}</>;
+  return <><a className={className} href={href} title={sectionTitle(section)} aria-label={accessibleLabel} aria-describedby={section.status === 'partial' ? descriptionId : undefined}>{section.data.unresolved} unresolved</a>{section.status === 'partial' && <Description id={descriptionId}>Lower-bound unresolved review threads: {section.reason}</Description>}</>;
 }
 
 function Diff({ href, section }: { href: string; section: PullRequestSummary['diff'] }) {
@@ -95,7 +95,7 @@ function Agents({ section }: { section: PullRequestSummary['agents'] }) {
     const id = `${descriptionId}-${agent.agentId}`;
     return <Fragment key={agent.agentId}>
       {index > 0 && <Separator />}
-      <span className="agent" title={title} aria-describedby={id}>{agentLabel(agent, section.status === 'partial')}<Description id={id}>{title}</Description></span>
+      <span className="agent" title={title} aria-describedby={id}>{agentLabel(agent)}<Description id={id}>{title}</Description></span>
     </Fragment>;
   })}</>;
 }

@@ -74,7 +74,7 @@ async function routeRemotePullRequest(
   });
 }
 
-test('shows lower bounds without a futile Retry for hidden conversation data', async ({ extension }) => {
+test('shows plain counts with incomplete-data explanations and no Retry for hidden conversations', async ({ extension }) => {
   const requests: string[] = [];
   const current: RemoteGeneration = {
     additions: 10,
@@ -91,7 +91,7 @@ test('shows lower bounds without a futile Retry for hidden conversation data', a
   const card = row.locator('github-pr-overview .pr-overview-card');
   const nativeCounter = row.locator('a[aria-label="2 comments"]');
   await expect.poll(() => card.evaluate(visibleCardLine))
-    .toBe('≥0 unresolved · −2/+10 · 2 files · Codex ≥1');
+    .toBe('0 unresolved · −2/+10 · 2 files · Codex 1');
   await expect(card.getByRole('button', { name: 'Retry pull request overview' })).toHaveCount(0);
   await expect(card.getByLabel('At least 0 unresolved review threads')).toHaveAttribute('title', /thread/i);
   await expect(nativeCounter).toHaveText('2');
@@ -130,7 +130,7 @@ for (const target of ['conversation', 'files', 'timeline'] as const) {
     }
 
     await expect.poll(() => card.evaluate(visibleCardLine))
-      .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1');
+      .toBe('0 unresolved · −353/+524 · 18 files · Copilot 1');
     await expect(retry).toHaveCount(0);
     await expect(card).toHaveAttribute('aria-busy', 'false');
     expect(attempts).toBe(2);

@@ -25,9 +25,9 @@ the choice persists across browser restarts and extension updates.
   has not responded.
 - A subtle marker for pull requests authored by the signed-in viewer.
 
-Incomplete thread and agent counts use `≥`, for example `≥0 unresolved` or
-`Codex ≥1`, so missing conversation data is visible without hovering. Partial
-diff counts retain their `+` suffix. Hovering explains what GitHub omitted.
+Thread and agent counts use plain numbers, including when data is incomplete.
+Hover and screen-reader descriptions explain what GitHub omitted. Partial
+diff counts retain their `+` suffix.
 
 Visible rows are checked every minute and when the tab regains focus or becomes
 visible. Summaries older than 60 seconds refresh; a native comment-count change
@@ -90,8 +90,8 @@ Automated fixtures cannot prove them:
 
 - Public and private PR lists render.
 - Exact and progressive diff totals are correct.
-- Deferred thread bodies show honest agent lower bounds; hidden review
-  conversations make both thread and agent totals explicit lower bounds.
+- Deferred thread bodies and hidden review conversations retain incomplete-count
+  explanations on hover and for screen readers, with plain visible numbers.
 - Scrolling starts eligible pending rows from the top of the list.
 - A completed diff section appears while review-thread and agent sections are still loading.
 - Filtering, Turbo navigation, dynamic rows, and route exit work.

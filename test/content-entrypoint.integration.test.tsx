@@ -238,7 +238,7 @@ it('renders the real content entrypoint and never mutates the native counter', a
   expect(wxtBoundary.options).not.toHaveProperty('cssInjectionMode');
 
   await waitFor(() => {
-    expect(renderedOverviewLine()).toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1');
+    expect(renderedOverviewLine()).toBe('0 unresolved · −353/+524 · 18 files · Copilot 1');
   });
   expect(warn).toHaveBeenCalledTimes(1);
   expect(warn).toHaveBeenCalledWith(
@@ -313,7 +313,7 @@ it('applies storage toggles immediately without navigating or leaking its listen
   await loadContentEntrypoint(fetcher);
   await definition.main(context.value);
   await waitFor(() => {
-    expect(renderedOverviewLine()).toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1');
+    expect(renderedOverviewLine()).toBe('0 unresolved · −353/+524 · 18 files · Copilot 1');
   });
   const href = window.location.href;
   const requestsBeforeDisable = fetcher.mock.calls.length;
@@ -424,7 +424,7 @@ it('renders the completed diff before timeline loading finishes', async () => {
     conversation.resolve(response(currentConversationHtml, 'https://github.com/octo/demo/pull/42'));
   });
   await waitFor(() => {
-    expect(renderedOverviewLine()).toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1');
+    expect(renderedOverviewLine()).toBe('0 unresolved · −353/+524 · 18 files · Copilot 1');
   });
 });
 
