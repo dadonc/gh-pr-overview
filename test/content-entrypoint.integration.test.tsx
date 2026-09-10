@@ -217,7 +217,7 @@ it('renders the real content entrypoint and never mutates the native counter', a
   const fixtures = new Map([
     ['https://github.com/octo/demo/pull/42', currentConversationHtml],
     ['https://github.com/octo/demo/pull/42/files', currentFilesHtml],
-    ['https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42', currentTimelineFragmentHtml],
+    ['https://github.com/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne', currentTimelineFragmentHtml],
   ]);
   const fetcher = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
     const url = String(input);
@@ -257,7 +257,7 @@ it('renders the real content entrypoint and never mutates the native counter', a
     expect(init).toMatchObject({
       credentials: 'same-origin',
       method: 'GET',
-      redirect: String(url).includes('/timeline_focused_item?') ? 'error' : 'follow',
+      redirect: String(url).includes('/pull/42/timeline_more_items?') ? 'error' : 'follow',
     });
   }
 
@@ -300,7 +300,7 @@ it('applies storage toggles immediately without navigating or leaking its listen
   const fixtures = new Map([
     ['https://github.com/octo/demo/pull/42', currentConversationHtml],
     ['https://github.com/octo/demo/pull/42/files', currentFilesHtml],
-    ['https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42', currentTimelineFragmentHtml],
+    ['https://github.com/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne', currentTimelineFragmentHtml],
   ]);
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -398,7 +398,7 @@ it('renders the completed diff before timeline loading finishes', async () => {
     const url = String(input);
     if (url === 'https://github.com/octo/demo/pull/42/files') return files.promise;
     if (url === 'https://github.com/octo/demo/pull/42') return conversation.promise;
-    if (url === 'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42') {
+    if (url === 'https://github.com/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne') {
       return Promise.resolve(response(currentTimelineFragmentHtml, url));
     }
     throw new Error(`Unexpected fixture request: ${url}`);

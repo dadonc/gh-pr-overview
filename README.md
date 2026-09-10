@@ -3,7 +3,8 @@
 GitHub PR Overview is a read-only Chrome extension that adds a compact review
 summary to repository pull-request lists while preserving GitHub's native
 right-side comment counter. It runs on URLs matching
-`https://github.com/*/*/pulls*`.
+`https://github.com/*/*/pulls*`. Both the classic and redesigned GitHub PR lists
+are supported.
 
 ## Toolbar control
 
@@ -70,7 +71,8 @@ Automated fixtures cannot prove them:
 
 - Public and private PR lists render.
 - Exact and progressive diff totals are correct.
-- Deferred threads show exact thread totals and honest agent lower bounds.
+- Deferred thread bodies show honest agent lower bounds; hidden review
+  conversations make both thread and agent totals explicit lower bounds.
 - Scrolling starts eligible pending rows from the top of the list.
 - A completed diff section appears while review-thread and agent sections are still loading.
 - Filtering, Turbo navigation, dynamic rows, and route exit work.

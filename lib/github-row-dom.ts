@@ -13,8 +13,13 @@ export interface PullRequestRowExtraction {
   viewerLogin?: string;
 }
 
+// GitHub serves both the legacy list and the React ListView during its rollout.
+// Share this selector with mounting and lifecycle checks so they agree on ownership.
+export const PULL_REQUEST_ROW_SELECTOR =
+  '[id^="issue_"].js-issue-row, [data-listview-component="items-list"] > li';
+
 const pullRequestTitleSelector =
-  '.Link--primary, [data-testid="issue-pr-title-link"], [data-testid="pull-request-title-link"], [data-testid="issue-title-link"]';
+  '.Link--primary, [data-testid="issue-pr-title-link"], [data-testid="pull-request-title-link"], [data-testid="issue-title-link"], [data-testid="listitem-title-link"]';
 
 function canonicalPullIdentity(href: string | null): PullRequestIdentity | undefined {
   const url = trustedGitHubUrl(href);
@@ -137,6 +142,21 @@ function validatedNativeCounterHref(href: string | null, identity: PullRequestId
   return isAllowed ? href : undefined;
 }
 
+function reactNativeCommentCount(row: HTMLElement, title: HTMLAnchorElement | undefined): NativeCommentCount | undefined {
+  if (!row.matches('[data-listview-component="items-list"] > li')) return undefined;
+  const counters = [...row.querySelectorAll('svg.octicon-comment')]
+    .filter((icon) => !icon.closest('a, github-pr-overview'))
+    .map((icon) => icon.parentElement!);
+  if (counters.length === 0) return undefined;
+  const count = counters.length === 1
+    ? nativeCommentCountFromLabel(`${counters[0]!.textContent?.trim()} comments`)
+    : undefined;
+  const href = title?.getAttribute('href');
+  return count !== undefined && href
+    ? { count, href, status: 'ready' }
+    : { reason: 'GitHub comment counter is malformed.', status: 'error' };
+}
+
 export function extractPullRequestRow(
   row: HTMLElement,
   viewerLogin?: string,
@@ -155,9 +175,9 @@ export function extractPullRequestRow(
       ? { reason: 'GitHub comment counter is malformed.', status: 'error' }
       : counterResolution.isAmbiguous
         ? { reason: 'GitHub comment counter is malformed.', status: 'error' }
-        : { status: 'zero' };
+        : reactNativeCommentCount(row, pullLink) ?? { status: 'zero' };
   return {
-    authorLogin: row.querySelector('.opened-by a[data-hovercard-type="user"]')?.textContent?.trim() || undefined,
+    authorLogin: row.querySelector('.opened-by a[data-hovercard-type="user"], a[data-testid="author-filter-link"]')?.textContent?.trim() || undefined,
     identity,
     nativeComments,
     viewerLogin,
@@ -171,7 +191,7 @@ export function extractPullRequestRows(document: Document): PullRequestRowExtrac
       ?.trim() || undefined;
 
   return [...document.querySelectorAll<HTMLElement>(
-    '[id^="issue_"].js-issue-row',
+    PULL_REQUEST_ROW_SELECTOR,
   )].flatMap((row) => {
     const extraction = extractPullRequestRow(row, viewerLogin);
     return extraction ? [extraction] : [];

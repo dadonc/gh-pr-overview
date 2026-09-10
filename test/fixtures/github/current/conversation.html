@@ -2,10 +2,8 @@
 <html>
   <body>
     <div id="discussion_bucket"></div>
-    <div
-      id="js-timeline-progressive-loader"
-      data-timeline-item-src="octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&amp;id=PR_current42"
-    ></div>
+    <div id="js-timeline-progressive-loader" data-timeline-item-src="octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&amp;id=PR_current42"></div>
+    <form class="js-ajax-pagination" method="get" action="octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne"></form>
     <review-thread-collapsible
       class="js-resolvable-timeline-thread-container"
       data-deferred-content-url="/octo/demo/pull/42/threads/420000001?rendering_on_files_tab=false"

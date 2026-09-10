@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import reactPrListHtml from '../test/fixtures/github/current/pr-list-react.html?raw';
 import currentPrListHtml from '../test/fixtures/github/current/pr-list.html?raw';
 import type {
   PullRequestLoadOptions,
@@ -39,7 +40,7 @@ function expectSnapshot(element: Element, expected: ReturnType<typeof snapshotAt
 }
 
 function createLifecycleCard(anchor: Element) {
-  const expectedRow = anchor.closest('[id^="issue_"].js-issue-row');
+  const expectedRow = anchor.closest('[id^="issue_"].js-issue-row, li');
   const host = anchor.ownerDocument.createElement('github-pr-overview');
   anchor.after(host);
   const remove = vi.fn(() => host.remove());
@@ -48,7 +49,7 @@ function createLifecycleCard(anchor: Element) {
     // Mirrors the adapter's row-ownership contract while the marker is connected.
     // Capturing its original row lets marker-only tests exercise the controller's separate exact-marker check.
     isConnected: () => host.isConnected &&
-      host.closest('[id^="issue_"].js-issue-row') === expectedRow,
+      host.closest('[id^="issue_"].js-issue-row, li') === expectedRow,
     remove,
     update,
   };
@@ -73,6 +74,46 @@ class FakeObserver {
 const Observer = FakeObserver as unknown as ObserverConstructor;
 
 describe('page reconciler', () => {
+  it('loads and remounts React list rows beneath metadata without changing native counters', async () => {
+    const document = page(reactPrListHtml);
+    const list = document.querySelector('ul')!;
+    const originalRow = list.firstElementChild!;
+    const replacement = originalRow.cloneNode(true);
+    const counter = originalRow.querySelector('[class^="MetadataContainer"]')!;
+    const counterHtml = counter.outerHTML;
+    const cards: ReturnType<typeof createLifecycleCard>[] = [];
+    const reconciler = createPageReconciler({
+      document,
+      client: { loadPullRequest: vi.fn(async () => remote) },
+      uiFactory: { mount(anchor) {
+        const card = createLifecycleCard(anchor);
+        cards.push(card);
+        return card.mounted;
+      } },
+    });
+    try {
+      reconciler.reconcile();
+      await vi.waitFor(() => expect(cards).toHaveLength(1));
+      await vi.waitFor(() => expect(cards[0]!.update).toHaveBeenLastCalledWith(expect.objectContaining({
+        summary: { ...remote, authoredByViewer: true },
+      })));
+      expect(cards[0]!.anchor.previousElementSibling?.contains(document.querySelector('[data-testid="timestamp-container"]'))).toBe(true);
+      expect(cards[0]!.host.closest('li')).toBe(originalRow);
+      expect(counter.outerHTML).toBe(counterHtml);
+      originalRow.replaceWith(replacement);
+      await vi.waitFor(() => expect(cards).toHaveLength(2));
+      expect(cards[0]!.host.isConnected).toBe(false);
+      await vi.waitFor(() => expect(cards[1]!.update).toHaveBeenLastCalledWith(expect.objectContaining({
+        summary: { ...remote, authoredByViewer: true },
+      })));
+    } finally {
+      reconciler.cleanup();
+    }
+    expect(list.querySelector('github-pr-overview')).toBeNull();
+    expect(list.querySelector('[data-pr-overview-mount-anchor]')).toBeNull();
+    expect(list.querySelector('[class^="MetadataContainer"]')!.outerHTML).toBe(counterHtml);
+  });
+
   it('only accepts an exact repository pulls route with query or trailing slash', () => {
     expect(isPullRequestListRoute(new URL('https://github.com/o/r/pulls'))).toBe(true);
     expect(isPullRequestListRoute(new URL('https://github.com/o/r/pulls/?q=open'))).toBe(true);
@@ -1026,8 +1067,8 @@ describe('page reconciler', () => {
     expect(destinationRow.querySelectorAll('github-pr-overview')).toHaveLength(1);
     expect(originalRow.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
     expect(destinationRow.querySelectorAll('[data-pr-overview-mount-anchor]')).toHaveLength(1);
-    expect(originalCards[1]!.host.closest('[id^="issue_"].js-issue-row')).toBe(originalRow);
-    expect(destinationCards[0]!.host.closest('[id^="issue_"].js-issue-row')).toBe(destinationRow);
+    expect(originalCards[1]!.host.closest('[id^="issue_"].js-issue-row, li')).toBe(originalRow);
+    expect(destinationCards[0]!.host.closest('[id^="issue_"].js-issue-row, li')).toBe(destinationRow);
 
     resolveReplacement(originalCards[1]!.mounted);
     await vi.waitFor(() => expect(originalCards[1]!.update).toHaveBeenCalledTimes(1));

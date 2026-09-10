@@ -6,6 +6,7 @@ import {
   enabledFromStorageChange,
   readEnabled,
 } from '../lib/extension-toggle';
+import { PULL_REQUEST_ROW_SELECTOR } from '../lib/github-row-dom';
 import { createGitHubClient } from '../lib/github-client';
 import { CARD_STYLES, PullRequestCard } from '../lib/pr-card';
 
@@ -60,8 +61,8 @@ export default defineContentScript({
           return {
             isConnected() {
               return ui.shadowHost.isConnected &&
-                ui.shadowHost.closest('[id^="issue_"].js-issue-row') ===
-                  anchor.closest('[id^="issue_"].js-issue-row');
+                ui.shadowHost.closest(PULL_REQUEST_ROW_SELECTOR) ===
+                  anchor.closest(PULL_REQUEST_ROW_SELECTOR);
             },
             remove() { ui.remove(); },
             update(next) { ui.mounted?.render(<PullRequestCard {...next} />); },

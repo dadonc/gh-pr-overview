@@ -317,3 +317,35 @@ test('does not flash overview UI when stored state is disabled before navigation
   await extension.expectNoFailures();
   expect(await overviewHostAdditions(extension.page)).toBe(0);
 });
+
+
+test('renders on the redesigned React list through row replacement and toolbar toggles', async ({ extension }) => {
+  await extension.page.goto(extension.urls.reactPrList);
+  const row = extension.page.locator('#react-pr-42');
+  const card = row.locator('github-pr-overview .pr-overview-card');
+  const counter = row.locator('[class^="MetadataContainer"]');
+  const originalCounter = await counter.evaluate((element) => element.outerHTML);
+  await expect.poll(() => card.evaluate(readVisibleCardLine))
+    .toBe('0 unresolved · −353/+524 · 18 files · Copilot 1');
+  await expect(card).toHaveClass(/authored/);
+  await expect(counter).toBeVisible();
+  expect(await row.locator('[data-pr-overview-mount-anchor]').evaluate((anchor) =>
+    Boolean(anchor.previousElementSibling?.querySelector('[data-testid="timestamp-container"]')),
+  )).toBe(true);
+
+  await row.evaluate((element) => {
+    const replacement = element.cloneNode(true) as HTMLElement;
+    replacement.querySelectorAll('github-pr-overview, [data-pr-overview-mount-anchor]').forEach((node) => node.remove());
+    element.replaceWith(replacement);
+  });
+  await expect(card).toHaveCount(1);
+  await expect.poll(() => card.evaluate(readVisibleCardLine))
+    .toBe('0 unresolved · −353/+524 · 18 files · Copilot 1');
+  await extension.setEnabled(false);
+  await expect(card).toHaveCount(0);
+  await extension.setEnabled(true);
+  await expect.poll(() => card.evaluate(readVisibleCardLine))
+    .toBe('0 unresolved · −353/+524 · 18 files · Copilot 1');
+  expect(await counter.evaluate((element) => element.outerHTML)).toBe(originalCounter);
+  await extension.expectNoFailures();
+});

@@ -7,6 +7,7 @@ import type {
 } from './github-client';
 import type { PullRequestRowExtraction } from './github-dom';
 import {
+  PULL_REQUEST_ROW_SELECTOR,
   extractPullRequestRow,
   findPullRequestTitle,
 } from './github-dom';
@@ -122,6 +123,11 @@ class RowController {
     anchor.setAttribute('data-pr-overview-mount-anchor', '');
     anchor.setAttribute('aria-hidden', 'true');
     const title = findPullRequestTitle(this.row)?.anchor;
+    const reactDescription = this.row.querySelector('[data-testid="timestamp-container"]')?.parentElement;
+    if (reactDescription && this.safeMountContainer(reactDescription.parentElement, title)) {
+      reactDescription.after(anchor);
+      return anchor;
+    }
     const openedBy = this.row.querySelector('.opened-by');
     const metadata = openedBy?.parentElement;
     const mainContent = title?.closest<HTMLElement>('.flex-auto.min-width-0, .flex-auto, .min-width-0');
@@ -149,7 +155,7 @@ class RowController {
 
   private ownsConnectedMountAnchor(): boolean {
     return this.mountAnchor.isConnected &&
-      this.mountAnchor.closest<HTMLElement>('[id^="issue_"].js-issue-row') === this.row;
+      this.mountAnchor.closest<HTMLElement>(PULL_REQUEST_ROW_SELECTOR) === this.row;
   }
 
   private ownsConnectedMountedUi(): boolean {
@@ -276,7 +282,7 @@ export function createPageReconciler(options: PageReconcilerOptions) {
   let queued = false;
   let stopped = false;
   const orderedControllers = () =>
-    [...options.document.querySelectorAll<HTMLElement>('[id^="issue_"].js-issue-row')]
+    [...options.document.querySelectorAll<HTMLElement>(PULL_REQUEST_ROW_SELECTOR)]
       .flatMap((row) => {
         const controller = controllers.get(row);
         return controller ? [controller] : [];
@@ -311,7 +317,7 @@ export function createPageReconciler(options: PageReconcilerOptions) {
       if (relevantRecords.length === 0) return;
       for (const record of relevantRecords) {
         const target = record.target.nodeType === 1 ? record.target as Element : record.target.parentElement;
-        const row = target?.closest<HTMLElement>('[id^="issue_"].js-issue-row');
+        const row = target?.closest<HTMLElement>(PULL_REQUEST_ROW_SELECTOR);
         if (!row) continue;
         if (record.type === 'childList' && [...record.removedNodes].some((node) =>
           node.nodeType === 1 &&
@@ -321,7 +327,7 @@ export function createPageReconciler(options: PageReconcilerOptions) {
       queueReconcile();
     });
     observer.observe(options.document, {
-      attributeFilter: ['aria-label', 'class', 'content', 'data-comment-count', 'data-hovercard-type', 'data-login', 'href', 'role'],
+      attributeFilter: ['aria-label', 'class', 'content', 'data-comment-count', 'data-hovercard-type', 'data-login', 'data-testid', 'data-listview-component', 'href', 'role'],
       attributes: true,
       characterData: true,
       childList: true,
@@ -341,7 +347,7 @@ export function createPageReconciler(options: PageReconcilerOptions) {
   const reconcile = () => {
     observe();
     if (!isPullRequestListRoute(options.document.location)) { clear(); return; }
-    const rows = [...options.document.querySelectorAll<HTMLElement>('[id^="issue_"].js-issue-row')];
+    const rows = [...options.document.querySelectorAll<HTMLElement>(PULL_REQUEST_ROW_SELECTOR)];
     const viewerLogin =
       options.document.querySelector('meta[name="user-login"]')
         ?.getAttribute('content')

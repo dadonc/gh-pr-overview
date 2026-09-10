@@ -82,7 +82,7 @@ describe('GitHub pull-request data pipeline', () => {
     const files = deferred<Response>();
     const fragmentStarted = deferred<void>();
     const updates: PullRequestRemoteUpdate[] = [];
-    const conversation = '<div id="discussion_bucket"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=next"></div>';
+    const conversation = '<div id="discussion_bucket"></div><form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline?after=next"></form>';
     const fetcher = vi.fn((url: RequestInfo | URL) => {
       const value = String(url);
       if (value.endsWith('/files')) return files.promise;
@@ -222,7 +222,7 @@ describe('GitHub pull-request data pipeline', () => {
 
   it('publishes a partial final timeline update when a fragment fails', async () => {
     const updates: PullRequestRemoteUpdate[] = [];
-    const conversation = '<div id="discussion_bucket"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=retry"></div>';
+    const conversation = '<div id="discussion_bucket"></div><form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline?after=retry"></form>';
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
       if (value.endsWith('/files')) return response(diffAggregateHtml, value);
@@ -243,7 +243,7 @@ describe('GitHub pull-request data pipeline', () => {
   });
 
   it('uses GitHub request metadata only for timeline fragment fetches', async () => {
-    const fragmentUrl = 'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42';
+    const fragmentUrl = 'https://github.com/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne';
     const conversation = `<!doctype html>
       <html>
         <head>
@@ -252,8 +252,7 @@ describe('GitHub pull-request data pipeline', () => {
         </head>
         <body>
           <div id="discussion_bucket"></div>
-          <div id="js-timeline-progressive-loader"
-               data-timeline-item-src="/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&amp;id=PR_current42"></div>
+          <form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne"></form>
         </body>
       </html>`;
     const fetcher = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) => {
@@ -269,6 +268,7 @@ describe('GitHub pull-request data pipeline', () => {
     expect(fragmentCall).toBeDefined();
     expect(fragmentCall?.[1]).toMatchObject({ redirect: 'error' });
     const fragmentHeaders = new Headers(fragmentCall?.[1]?.headers);
+    expect(fragmentHeaders.get('Accept')).toBe('text/html');
     expect(fragmentHeaders.get('X-Requested-With')).toBe('XMLHttpRequest');
     expect(fragmentHeaders.get('X-Fetch-Nonce')).toBe('v2:test-fetch-nonce');
     expect(fragmentHeaders.get('X-GitHub-Client-Version')).toBe(
@@ -295,8 +295,7 @@ describe('GitHub pull-request data pipeline', () => {
           <meta name="fetch-nonce" content="body-fetch-nonce">
           <meta name="release" content="body-client-version">
           <div id="discussion_bucket"></div>
-          <div id="js-timeline-progressive-loader"
-               data-timeline-item-src="/octo/demo/pull/42/timeline?after=next"></div>
+          <form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline?after=next"></form>
         </body>
       </html>`;
     const fetcher = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) => {
@@ -311,6 +310,7 @@ describe('GitHub pull-request data pipeline', () => {
     const fragmentCall = fetcher.mock.calls.find(([url]) => String(url) === fragmentUrl);
     expect(fragmentCall).toBeDefined();
     expect(Object.fromEntries(new Headers(fragmentCall?.[1]?.headers))).toEqual({
+      accept: 'text/html',
       'x-requested-with': 'XMLHttpRequest',
     });
   });
@@ -318,8 +318,7 @@ describe('GitHub pull-request data pipeline', () => {
   it('still marks a fragment request when optional GitHub metadata is absent', async () => {
     const fragmentUrl = 'https://github.com/octo/demo/pull/42/timeline?after=next';
     const conversation = `<div id="discussion_bucket"></div>
-      <div id="js-timeline-progressive-loader"
-           data-timeline-item-src="/octo/demo/pull/42/timeline?after=next"></div>`;
+      <form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline?after=next"></form>`;
     const fetcher = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) => {
       const value = String(url);
       if (value.endsWith('/files')) return response(diffAggregateHtml, value);
@@ -332,6 +331,7 @@ describe('GitHub pull-request data pipeline', () => {
     const fragmentCall = fetcher.mock.calls.find(([url]) => String(url) === fragmentUrl);
     expect(fragmentCall).toBeDefined();
     expect(Object.fromEntries(new Headers(fragmentCall?.[1]?.headers))).toEqual({
+      accept: 'text/html',
       'x-requested-with': 'XMLHttpRequest',
     });
   });
@@ -340,7 +340,7 @@ describe('GitHub pull-request data pipeline', () => {
     const fixtureResponses = new Map([
       ['https://github.com/octo/demo/pull/42', currentConversationHtml],
       ['https://github.com/octo/demo/pull/42/files', currentFilesHtml],
-      ['https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42', currentTimelineFragmentHtml],
+      ['https://github.com/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne', currentTimelineFragmentHtml],
     ]);
     const fetcher = vi.fn(async (url: RequestInfo | URL, _init?: RequestInit) => {
       const value = String(url);
@@ -382,7 +382,7 @@ describe('GitHub pull-request data pipeline', () => {
     const expectedUrls = [
       'https://github.com/octo/demo/pull/42',
       'https://github.com/octo/demo/pull/42/files',
-      'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42',
+      'https://github.com/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne',
     ];
     expect(fetcher).toHaveBeenCalledTimes(3);
     expect(new Set(fetcher.mock.calls.map(([url]) => String(url)))).toEqual(new Set(expectedUrls));
@@ -408,7 +408,7 @@ describe('GitHub pull-request data pipeline', () => {
     })).toBe(false);
   });
 
-  it('accepts only canonical same-PR focused and legacy timeline URLs', () => {
+  it('accepts only canonical same-PR paginated and legacy timeline URLs', () => {
     expect(isAllowedPullRequestUrl('/octo/demo/pull/42', identity, 'conversation')).toBe(true);
     expect(isAllowedPullRequestUrl('https://github.com/octo/demo/pull/42/files', identity, 'files')).toBe(true);
     expect(isAllowedPullRequestUrl('https://github.com/octo/demo/pull/42/changes', identity, 'files')).toBe(true);
@@ -422,12 +422,12 @@ describe('GitHub pull-request data pipeline', () => {
       expect(isAllowedPullRequestUrl(candidate, identity, 'files')).toBe(false);
     }
     expect(isAllowedPullRequestUrl(
-      'octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42',
+      'octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne',
       identity,
       'fragment',
     )).toBe(true);
     expect(isAllowedPullRequestUrl(
-      'octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&before_cursor=Cursor%2BZero&id=PR_current42',
+      'octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne&before_cursor=Cursor%2BZero',
       identity,
       'fragment',
     )).toBe(true);
@@ -455,26 +455,25 @@ describe('GitHub pull-request data pipeline', () => {
       '/octo/demo/pull/42/../42/timeline?after=cursor',
       '//github.com/octo/demo/pull/42/timeline?after=cursor',
       '/octo/demo/issues/42',
-      '/other/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
-      '/octo/other/timeline_focused_item?after_cursor=cursor&id=PR_current42',
-      '/octo/demo/pull/42/timeline_focused_item?after_cursor=cursor&id=PR_current42',
-      '/octo/demo/timeline_focused_item?after_cursor=cursor',
-      '/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42&id=PR_other',
-      '/octo/demo/timeline_focused_item?after_cursor=cursor&id=not-a-pr-node',
-      '/octo/demo/timeline_focused_item?id=PR_current42',
-      '/octo/demo/timeline_focused_item?after_cursor=one&after_cursor=two&id=PR_current42',
-      '/octo/demo/timeline_focused_item?after_cursor=cursor&before_cursor=&id=PR_current42',
-      '/octo/demo/timeline_focused_item?after_cursor=cursor&before_cursor=one&before_cursor=two&id=PR_current42',
-      '/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42&source=fragment',
-      'https://user:secret@github.com/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
-      'https://github.com:444/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
-      'https://evil.test/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
-      '//github.com/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
-      '/octo/demo/../demo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
-      '/octo\\demo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
-      '/octo%2fdemo/timeline_focused_item?after_cursor=cursor&id=PR_current42',
-      '/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42#fragment',
-      '/octo/demo/timeline_focused_item?after_cursor=cursor&id=PR_current42#',
+      '/other/demo/pull/42/timeline_more_items?after_cursor=cursor',
+      '/octo/other/pull/42/timeline_more_items?after_cursor=cursor',
+      '/octo/demo/pull/42/pull/42/timeline_more_items?after_cursor=cursor',
+      '/octo/demo/pull/42/timeline_more_items?after_cursor=cursor&id=PR_other',
+      '/octo/demo/pull/42/timeline_more_items?after_cursor=cursor&id=not-a-pr-node',
+      '/octo/demo/pull/42/timeline_more_items?id=PR_current42',
+      '/octo/demo/pull/42/timeline_more_items?after_cursor=one&after_cursor=two',
+      '/octo/demo/pull/42/timeline_more_items?after_cursor=cursor&before_cursor=',
+      '/octo/demo/pull/42/timeline_more_items?after_cursor=cursor&before_cursor=one&before_cursor=two',
+      '/octo/demo/pull/42/timeline_more_items?after_cursor=cursor&source=fragment',
+      'https://user:secret@github.com/octo/demo/pull/42/timeline_more_items?after_cursor=cursor',
+      'https://github.com:444/octo/demo/pull/42/timeline_more_items?after_cursor=cursor',
+      'https://evil.test/octo/demo/pull/42/timeline_more_items?after_cursor=cursor',
+      '//github.com/octo/demo/pull/42/timeline_more_items?after_cursor=cursor',
+      '/octo/demo/../demo/pull/42/timeline_more_items?after_cursor=cursor',
+      '/octo\\demo/pull/42/timeline_more_items?after_cursor=cursor',
+      '/octo%2fdemo/pull/42/timeline_more_items?after_cursor=cursor',
+      '/octo/demo/pull/42/timeline_more_items?after_cursor=cursor#fragment',
+      '/octo/demo/pull/42/timeline_more_items?after_cursor=cursor#',
       '/octo/demo/pull/42/timeline',
       '/octo/demo/pull/42/timeline?after=',
       '/octo/demo/pull/42/timeline?after=cursor#',
@@ -485,11 +484,10 @@ describe('GitHub pull-request data pipeline', () => {
     }
   });
 
-  it('follows a focused timeline fragment with an optional before cursor', async () => {
-    const fragmentUrl = 'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&before_cursor=Cursor%2BZero&id=PR_current42';
+  it('follows a timeline pagination fragment with an optional before cursor', async () => {
+    const fragmentUrl = 'https://github.com/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne&before_cursor=Cursor%2BZero';
     const conversation = `<div id="discussion_bucket"></div>
-      <div id="js-timeline-progressive-loader"
-           data-timeline-item-src="/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&amp;before_cursor=Cursor%2BZero&amp;id=PR_current42"></div>`;
+      <form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne&amp;before_cursor=Cursor%2BZero"></form>`;
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
       if (value.endsWith('/files')) return response(diffAggregateHtml, value);
@@ -549,12 +547,12 @@ describe('GitHub pull-request data pipeline', () => {
     expect(summary.agents.status).toBe('ready');
   });
 
-  it('follows a focused timeline fragment with its original cursor encoding and rejects an ID mismatch', async () => {
-    const mismatchedNextFragment = `${currentTimelineFragmentHtml}<div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/timeline_focused_item?after_cursor=Later&id=PR_other"></div>`;
+  it('follows a timeline pagination fragment with its original cursor encoding and rejects a different pull request', async () => {
+    const mismatchedNextFragment = `${currentTimelineFragmentHtml}<form class="js-ajax-pagination" method="get" action="/octo/demo/pull/43/timeline_more_items?after_cursor=Later"></form>`;
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
       if (value.endsWith('/files')) return response(currentFilesHtml, value);
-      if (value === 'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42') {
+      if (value === 'https://github.com/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne') {
         return response(mismatchedNextFragment, value);
       }
       return response(currentConversationHtml, value);
@@ -563,7 +561,7 @@ describe('GitHub pull-request data pipeline', () => {
     const result = await clientFor(fetcher).loadPullRequest(identity);
 
     expect(fetcher).toHaveBeenCalledWith(
-      'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42',
+      'https://github.com/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne',
       expect.objectContaining({
         credentials: 'same-origin',
         method: 'GET',
@@ -571,7 +569,7 @@ describe('GitHub pull-request data pipeline', () => {
       }),
     );
     expect(fetcher).not.toHaveBeenCalledWith(
-      'https://github.com/octo/demo/timeline_focused_item?after_cursor=Later&id=PR_other',
+      'https://github.com/octo/demo/pull/43/timeline_more_items?after_cursor=Later',
       expect.anything(),
     );
     expect(result.reviewThreads).toMatchObject({
@@ -584,18 +582,17 @@ describe('GitHub pull-request data pipeline', () => {
     });
   });
 
-  it('rejects a fragment response whose final URL changes the focused pull-request ID', async () => {
-    const fragmentUrl = 'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42';
+  it('rejects a fragment response whose final URL changes the pull request', async () => {
+    const fragmentUrl = 'https://github.com/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne';
     const conversation = `<div id="discussion_bucket"></div>
-      <div id="js-timeline-progressive-loader"
-           data-timeline-item-src="/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&amp;id=PR_current42"></div>`;
+      <form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne"></form>`;
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
       if (value.endsWith('/files')) return response(diffAggregateHtml, value);
       if (value === fragmentUrl) {
         return response(
           currentTimelineFragmentHtml,
-          'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_other',
+          'https://github.com/octo/demo/pull/43/timeline_more_items?after_cursor=Cursor%2BOne',
         );
       }
       return response(conversation, value);
@@ -615,18 +612,17 @@ describe('GitHub pull-request data pipeline', () => {
     });
   });
 
-  it('rejects a focused fragment response whose final URL is cross-origin', async () => {
-    const fragmentUrl = 'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42';
+  it('rejects a pagination fragment response whose final URL is cross-origin', async () => {
+    const fragmentUrl = 'https://github.com/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne';
     const conversation = `<div id="discussion_bucket"></div>
-      <div id="js-timeline-progressive-loader"
-           data-timeline-item-src="/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&amp;id=PR_current42"></div>`;
+      <form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne"></form>`;
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
       if (value.endsWith('/files')) return response(diffAggregateHtml, value);
       if (value === fragmentUrl) {
         return response(
           currentTimelineFragmentHtml,
-          'https://evil.test/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42',
+          'https://evil.test/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne',
         );
       }
       return response(conversation, value);
@@ -649,8 +645,7 @@ describe('GitHub pull-request data pipeline', () => {
   it('rejects a fragment response without a final URL', async () => {
     const fragmentUrl = 'https://github.com/octo/demo/pull/42/timeline?after=next';
     const conversation = `<div id="discussion_bucket"></div>
-      <div id="js-timeline-progressive-loader"
-           data-timeline-item-src="/octo/demo/pull/42/timeline?after=next"></div>`;
+      <form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline?after=next"></form>`;
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
       if (value.endsWith('/files')) return response(diffAggregateHtml, value);
@@ -673,7 +668,7 @@ describe('GitHub pull-request data pipeline', () => {
   });
 
   it('keeps a typed automated-comment fragment complete and aggregates its Copilot response', async () => {
-    const conversation = '<div id="discussion_bucket"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=automated-comment"></div>';
+    const conversation = '<div id="discussion_bucket"></div><form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline?after=automated-comment"></form>';
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
       if (value.endsWith('/files')) return response(diffAggregateHtml, value);
@@ -699,7 +694,7 @@ describe('GitHub pull-request data pipeline', () => {
   });
 
   it('keeps a phrase-based review event fragment complete and aggregates its Copilot request state', async () => {
-    const conversation = '<div id="discussion_bucket"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=started-reviewing"></div>';
+    const conversation = '<div id="discussion_bucket"></div><form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline?after=started-reviewing"></form>';
     const eventFragment = '<div class="TimelineItem" id="event-201"><strong>Copilot</strong> started reviewing</div>';
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
@@ -726,7 +721,7 @@ describe('GitHub pull-request data pipeline', () => {
   });
 
   it('keeps an unrelated event-only fragment structurally partial instead of exact ready zeroes', async () => {
-    const conversation = '<div id="discussion_bucket"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=commit"></div>';
+    const conversation = '<div id="discussion_bucket"></div><form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline?after=commit"></form>';
     const eventFragment = '<div class="TimelineItem" id="event-commit">someone committed</div>';
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
@@ -764,7 +759,7 @@ describe('GitHub pull-request data pipeline', () => {
   });
 
   it('does not fetch rejected dot-segment or protocol-relative timeline loaders', async () => {
-    const conversation = '<div id="discussion_bucket"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/./42/timeline?after=one"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="//github.com/octo/demo/pull/42/timeline?after=two"></div>';
+    const conversation = '<div id="discussion_bucket"></div><form class="js-ajax-pagination" method="get" action="/octo/demo/pull/./42/timeline?after=one"></form><form class="js-ajax-pagination" method="get" action="//github.com/octo/demo/pull/42/timeline?after=two"></form>';
     const fetcher = vi.fn(async (url: RequestInfo | URL) =>
       response(String(url).endsWith('/files') ? diffAggregateHtml : conversation, String(url)),
     );
@@ -800,8 +795,8 @@ describe('GitHub pull-request data pipeline', () => {
   });
 
   it('follows each timeline fragment once, avoids cycles, and merges duplicate threads from all sources', async () => {
-    const first = `${timelineHtml}<div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=cycle"></div>`;
-    const fragment = `<div class="js-resolvable-timeline-thread-container" data-resolved="false"><input name="pull_request_review_thread_id" value="PRRT_active"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=cycle"></div>`;
+    const first = `${timelineHtml}<form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline?after=cycle"></form>`;
+    const fragment = `<div class="js-resolvable-timeline-thread-container" data-resolved="false"><input name="pull_request_review_thread_id" value="PRRT_active"></div><form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline?after=cycle"></form>`;
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
       if (value.endsWith('/files')) return response(diffAggregateHtml, value);
@@ -818,7 +813,7 @@ describe('GitHub pull-request data pipeline', () => {
   });
 
   it('deduplicates case-variant fragment paths without changing opaque query values', async () => {
-    const conversation = '<div id="discussion_bucket"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=CaseSensitiveToken"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/OCTO/DEMO/PULL/42/TIMELINE?after=CaseSensitiveToken"></div>';
+    const conversation = '<div id="discussion_bucket"></div><form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline?after=CaseSensitiveToken"></form><form class="js-ajax-pagination" method="get" action="/OCTO/DEMO/PULL/42/TIMELINE?after=CaseSensitiveToken"></form>';
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
       if (value.endsWith('/files')) return response(diffAggregateHtml, value);
@@ -833,7 +828,7 @@ describe('GitHub pull-request data pipeline', () => {
 
   it('marks thread and agent counts partial when the fragment cap is reached', async () => {
     const loaders = Array.from({ length: 21 }, (_, index) =>
-      `<div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=${index}"></div>`,
+      `<form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline?after=${index}"></form>`,
     ).join('');
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
@@ -849,7 +844,7 @@ describe('GitHub pull-request data pipeline', () => {
 
   it('caches a capped structural partial for the normal TTL', async () => {
     const loaders = Array.from({ length: 21 }, (_, index) =>
-      `<div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=${index}"></div>`,
+      `<form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline?after=${index}"></form>`,
     ).join('');
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
@@ -864,7 +859,7 @@ describe('GitHub pull-request data pipeline', () => {
   });
 
   it('keeps accumulated conversation data as partial when a timeline fragment or files page fails', async () => {
-    const conversation = '<div class="js-resolvable-timeline-thread-container" data-resolved="false"><input name="pull_request_review_thread_id" value="PRRT_one"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=next"></div>';
+    const conversation = '<div class="js-resolvable-timeline-thread-container" data-resolved="false"><input name="pull_request_review_thread_id" value="PRRT_one"></div><form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline?after=next"></form>';
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
       if (value.endsWith('/files') || value.includes('after=next')) return failed();
@@ -909,7 +904,7 @@ describe('GitHub pull-request data pipeline', () => {
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
       if (value.endsWith('/files')) return response(currentFilesHtml, value);
-      if (value.includes('timeline_focused_item')) return response(currentTimelineFragmentHtml, value);
+      if (value.includes('timeline_more_items')) return response(currentTimelineFragmentHtml, value);
       return response(currentConversationHtml, value);
     });
 
@@ -924,7 +919,7 @@ describe('GitHub pull-request data pipeline', () => {
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
       if (value.endsWith('/files')) return response(currentFilesHtml, value);
-      if (value.includes('timeline_focused_item')) return response(currentTimelineFragmentHtml, value);
+      if (value.includes('timeline_more_items')) return response(currentTimelineFragmentHtml, value);
       return response(currentConversationHtml, value);
     });
     const client = clientFor(fetcher);
@@ -936,7 +931,7 @@ describe('GitHub pull-request data pipeline', () => {
   });
 
   it('does not cache a result containing a failed timeline fragment', async () => {
-    const conversation = '<div id="discussion_bucket"></div><div id="js-timeline-progressive-loader" data-timeline-item-src="/octo/demo/pull/42/timeline?after=retry"></div>';
+    const conversation = '<div id="discussion_bucket"></div><form class="js-ajax-pagination" method="get" action="/octo/demo/pull/42/timeline?after=retry"></form>';
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
       if (value.includes('after=retry')) return failed();
@@ -1070,7 +1065,7 @@ describe('GitHub pull-request data pipeline', () => {
     const controller = new AbortController();
     let allowSuccess = false;
     const fetcher = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
-      if (allowSuccess) return Promise.resolve(response(String(url).endsWith('/files') ? diffAggregateHtml : timelineHtml.replace(/<div id="js-timeline-progressive-loader"[\s\S]*?<\/div>/, ''), String(url)));
+      if (allowSuccess) return Promise.resolve(response(String(url).endsWith('/files') ? diffAggregateHtml : timelineHtml.replace(/<form class="js-ajax-pagination"[\s\S]*?<\/form>/, ''), String(url)));
       return new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true });
       });
@@ -1156,7 +1151,7 @@ describe('GitHub pull-request data pipeline', () => {
 
   it('reuses only unexpired per-PR completed summaries and never caches aborts', async () => {
     let now = 0;
-    const noFragments = timelineHtml.replace(/<div id="js-timeline-progressive-loader"[\s\S]*?<\/div>/, '');
+    const noFragments = timelineHtml.replace(/<form class="js-ajax-pagination"[\s\S]*?<\/form>/, '');
     const fetcher = vi.fn(async (url: RequestInfo | URL) =>
       response(String(url).endsWith('/files') ? diffAggregateHtml : noFragments, String(url)),
     );
@@ -1176,7 +1171,7 @@ describe('GitHub pull-request data pipeline', () => {
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       const value = String(url);
       if (!value.endsWith('/files') && fail) return failed();
-      return response(value.endsWith('/files') ? diffAggregateHtml : timelineHtml.replace(/<div id="js-timeline-progressive-loader"[\s\S]*?<\/div>/, ''), value);
+      return response(value.endsWith('/files') ? diffAggregateHtml : timelineHtml.replace(/<form class="js-ajax-pagination"[\s\S]*?<\/form>/, ''), value);
     });
     const client = clientFor(fetcher);
 
@@ -1185,5 +1180,23 @@ describe('GitHub pull-request data pipeline', () => {
     expect((await client.loadPullRequest(identity)).reviewThreads.status).toBe('ready');
 
     expect(fetcher).toHaveBeenCalledTimes(4);
+  });
+});
+
+
+describe('current timeline Load more endpoint', () => {
+  it('accepts only the current PR with single nonempty pagination cursors', () => {
+    const identity = { owner: 'octo', repository: 'demo', number: 42 };
+    expect(isAllowedPullRequestUrl('/octo/demo/pull/42/timeline_more_items?after_cursor=one&before_cursor=last', identity, 'fragment')).toBe(true);
+    expect(isAllowedPullRequestUrl('/octo/demo/pull/42/timeline_more_items?after_cursor=one', identity, 'fragment')).toBe(true);
+    for (const url of [
+      '/octo/demo/timeline_focused_item?after_cursor=one&id=PR_current42',
+      '/octo/demo/pull/43/timeline_more_items?after_cursor=one',
+      '/octo/demo/pull/42/timeline_more_items?after_cursor=',
+      '/octo/demo/pull/42/timeline_more_items?after_cursor=one&after_cursor=two',
+      '/octo/demo/pull/42/timeline_more_items?after_cursor=one&before_cursor=',
+      '/octo/demo/pull/42/timeline_more_items?after_cursor=one&before_cursor=two&before_cursor=three',
+      '/octo/demo/pull/42/timeline_more_items?after_cursor=one&extra=two',
+    ]) expect(isAllowedPullRequestUrl(url, identity, 'fragment')).toBe(false);
   });
 });

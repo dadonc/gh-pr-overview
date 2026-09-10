@@ -94,7 +94,6 @@ interface TimelineLoadOutcome {
 
 interface NormalizedTimelineFragment {
   dedupeKey: string;
-  focusedPullRequestId: string | undefined;
   href: string;
 }
 
@@ -124,27 +123,22 @@ function normalizeTimelineFragment(
   if (!url || url.hash) return undefined;
 
   const legacyPath = `${pullRequestPath(identity)}/timeline`;
-  const focusedPath = `/${identity.owner}/${identity.repository}/timeline_focused_item`;
+  const paginationPath = `${pullRequestPath(identity)}/timeline_more_items`;
   const isLegacy = url.pathname.toLowerCase() === legacyPath.toLowerCase();
-  const isFocused = url.pathname.toLowerCase() === focusedPath.toLowerCase();
-  if (!isLegacy && !isFocused) return undefined;
+  const isPagination = url.pathname.toLowerCase() === paginationPath.toLowerCase();
+  if (!isLegacy && !isPagination) return undefined;
 
   const parameters = url.searchParams;
-  let focusedPullRequestId: string | undefined;
-  if (isFocused) {
-    const ids = parameters.getAll('id');
+  if (isPagination) {
     const cursors = parameters.getAll('after_cursor');
     const beforeCursors = parameters.getAll('before_cursor');
     if (
-      parameters.size !== 2 + beforeCursors.length ||
-      ids.length !== 1 ||
+      parameters.size !== 1 + beforeCursors.length ||
       cursors.length !== 1 ||
       !cursors[0] ||
       beforeCursors.length > 1 ||
-      (beforeCursors.length === 1 && !beforeCursors[0]) ||
-      !/^PR_[A-Za-z0-9_-]+$/.test(ids[0] ?? '')
+      (beforeCursors.length === 1 && !beforeCursors[0])
     ) return undefined;
-    focusedPullRequestId = ids[0];
   } else {
     const after = parameters.getAll('after');
     const afterCursor = parameters.getAll('after_cursor');
@@ -156,7 +150,6 @@ function normalizeTimelineFragment(
 
   return {
     dedupeKey: `${url.origin}${url.pathname.toLowerCase()}${url.search}`,
-    focusedPullRequestId,
     href: url.href,
   };
 }
@@ -250,7 +243,7 @@ function isAuthenticationDocument(document: Document): boolean {
 }
 
 function fragmentRequestHeaders(document: Document): Headers {
-  const headers = new Headers({ 'X-Requested-With': 'XMLHttpRequest' });
+  const headers = new Headers({ Accept: 'text/html', 'X-Requested-With': 'XMLHttpRequest' });
   const fetchNonce = document.head?.querySelector<HTMLMetaElement>('meta[name="fetch-nonce"]')?.content.trim();
   const clientVersion = document.head?.querySelector<HTMLMetaElement>('meta[name="release"]')?.content.trim();
   if (fetchNonce) headers.set('X-Fetch-Nonce', fetchNonce);
@@ -352,26 +345,17 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
       let retryableFailure = false;
       if (!hasRecognizableTimelineEvidence(conversation.document)) addFragmentReason('GitHub did not expose recognizable timeline evidence.');
 
-      let pinnedFocusedPullRequestId: string | undefined;
       const queuedFragments: NormalizedTimelineFragment[] = [];
-      const addFragment = (candidate: string, isConversationLoader = false) => {
+      const addFragment = (candidate: string) => {
         const fragment = normalizeTimelineFragment(candidate, identity);
         if (!fragment) {
           addFragmentReason('GitHub exposed an invalid timeline fragment.');
           return;
         }
-        if (fragment.focusedPullRequestId) {
-          if (isConversationLoader && pinnedFocusedPullRequestId === undefined) {
-            pinnedFocusedPullRequestId = fragment.focusedPullRequestId;
-          } else if (pinnedFocusedPullRequestId !== fragment.focusedPullRequestId) {
-            addFragmentReason('GitHub exposed an invalid timeline fragment.');
-            return;
-          }
-        }
         queuedFragments.push(fragment);
       };
       for (const fragment of extractTimeline(conversation.document, identity).nextTimelineFragments) {
-        addFragment(fragment, true);
+        addFragment(fragment);
       }
       const seenFragments = new Set<string>();
       let followed = 0;

@@ -10,9 +10,10 @@ const QUIESCENCE_TIMEOUT_MS = 2_000;
 
 export const urls = {
   prList: 'https://github.com/octo/demo/pulls',
+  reactPrList: 'https://github.com/octo/demo/pulls?q=is%3Apr',
   conversation: 'https://github.com/octo/demo/pull/42',
   files: 'https://github.com/octo/demo/pull/42/files',
-  timeline: 'https://github.com/octo/demo/timeline_focused_item?after_cursor=Cursor%2BOne&id=PR_current42',
+  timeline: 'https://github.com/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne',
 } as const;
 
 interface Diagnostics {
@@ -53,13 +54,14 @@ function currentRow(html: string): string {
 }
 
 async function readFixtures() {
-  const [prList, conversation, files, timeline] = await Promise.all([
+  const [prList, conversation, files, timeline, reactPrList] = await Promise.all([
     readFile(path.join(fixtureDirectory, 'pr-list.html'), 'utf8'),
     readFile(path.join(fixtureDirectory, 'conversation.html'), 'utf8'),
     readFile(path.join(fixtureDirectory, 'files.html'), 'utf8'),
     readFile(path.join(fixtureDirectory, 'timeline-fragment.html'), 'utf8'),
+    readFile(path.join(fixtureDirectory, 'pr-list-react.html'), 'utf8'),
   ]);
-  return { conversation, files, prList, timeline };
+  return { conversation, files, prList, timeline, reactPrList };
 }
 
 function messageForConsole(type: string, text: string): string {
@@ -71,6 +73,7 @@ export const test = base.extend<{ extension: ExtensionHarness }>({
     const fixtures = await readFixtures();
     const responses = new Map<string, string>([
       [urls.prList, fixtures.prList],
+      [urls.reactPrList, fixtures.reactPrList],
       [urls.conversation, fixtures.conversation],
       [urls.files, fixtures.files],
       [urls.timeline, fixtures.timeline],
@@ -116,7 +119,7 @@ export const test = base.extend<{ extension: ExtensionHarness }>({
           await route.fulfill({
             body,
             contentType: 'text/html; charset=utf-8',
-            headers: request.url() === urls.prList
+            headers: (request.url() === urls.prList || request.url() === urls.reactPrList)
               ? { 'Content-Security-Policy': "default-src 'none'; style-src 'none'; img-src 'none'" }
               : undefined,
           });

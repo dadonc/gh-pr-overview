@@ -19,3 +19,23 @@ Expected PR 42 summary:
 - 18 changed files, 524 additions, 353 deletions
 - Copilot requested and responded at least once
 - Agent evidence is partial because a deferred body remains unloaded
+
+## React PR list (2026-09-10)
+
+`pr-list-react.html` is a minimal sanitized reconstruction of the signed-in
+React ListView inspected on 2026-09-10. It preserves the observed list marker,
+title and author test IDs, description nesting, and non-link Octicon comment
+counter. Repository, author, title, IDs, timestamps, and CSS-module suffixes are
+synthetic. The expected native count is 12; PR 42 uses the existing remote
+summary fixtures. The legacy `pr-list.html` remains covered because public and
+signed-out GitHub pages still serve that layout.
+
+## Timeline pagination correction (2026-09-10)
+
+The earlier fixture incorrectly treated `data-timeline-item-src` as pagination.
+GitHub's frontend uses that helper only for a specific comment anchor. The
+conversation fixture now includes both that ignored helper and a GET pagination
+form with the observed `/pull/{number}/timeline_more_items` action. The standalone
+`timeline-pagination.html` reproduces the form with both cursors. This contract
+was verified against public `microsoft/TypeScript` PRs 40336 and 54505; requests
+with `Accept: text/html` return HTML and subsequent pagination forms.

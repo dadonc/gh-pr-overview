@@ -39,7 +39,8 @@ export interface TimelineExtraction {
 }
 
 const threadRootSelector = '.js-resolvable-timeline-thread-container, review-thread-collapsible';
-const timelineLoaderSelector = '#js-timeline-progressive-loader[data-timeline-item-src]';
+// The progressive loader's data-timeline-item-src is an anchor lookup, not pagination.
+const timelineLoaderSelector = 'form.js-ajax-pagination[method="get" i][action]:not(.js-review-hidden-comment-ids)';
 const inlineResponseSelector = '[id^="discussion_r"], [id^="discussion-diff-"]';
 const reviewRequestSelector = '[data-review-request-action], [data-review-requested-login], .TimelineItem[id^="event-"]';
 const reviewEventSelector = '[data-review-event="started-reviewing"], .TimelineItem[id^="event-"]';
@@ -252,7 +253,12 @@ export function extractTimeline(
   };
   const nextTimelineFragments: string[] = []; const seenFragments = new Set<string>();
   for (const document of documentsFrom(input)) {
-    for (const loader of document.querySelectorAll<HTMLElement>(timelineLoaderSelector)) { const fragment = loader.getAttribute('data-timeline-item-src'); if (fragment && !seenFragments.has(fragment)) { seenFragments.add(fragment); nextTimelineFragments.push(fragment); } }
+    if (document.querySelector('form.js-review-hidden-comment-ids')) {
+      const reason = 'GitHub has additional review conversations that are not loaded.';
+      reviewThreadReasons.add(reason);
+      agentReasons.add(reason);
+    }
+    for (const loader of document.querySelectorAll<HTMLElement>(timelineLoaderSelector)) { const fragment = loader.getAttribute('action'); if (fragment && !seenFragments.has(fragment)) { seenFragments.add(fragment); nextTimelineFragments.push(fragment); } }
     for (const root of document.querySelectorAll<HTMLElement>(threadRootSelector)) {
       const identities = threadIdentities(root, identity);
       const resolved = resolvedState(root);

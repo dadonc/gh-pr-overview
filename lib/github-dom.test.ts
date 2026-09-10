@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import reactPrListHtml from '../test/fixtures/github/current/pr-list-react.html?raw';
+import paginationHtml from '../test/fixtures/github/current/timeline-pagination.html?raw';
 import currentPrListHtml from '../test/fixtures/github/current/pr-list.html?raw';
 import currentChangesHtml from '../test/fixtures/github/current/changes.html?raw';
 import currentFilesHtml from '../test/fixtures/github/current/files.html?raw';
@@ -26,6 +28,22 @@ const extractTimeline = (
 ) => extractTimelineWithIdentity(input, identity);
 
 describe('extractPullRequestRows', () => {
+  it('extracts the redesigned React list with its author and non-link comment counter', () => {
+    expect(extractPullRequestRows(parse(reactPrListHtml))).toEqual([{
+      authorLogin: 'octo-author',
+      identity: { number: 42, owner: 'octo', repository: 'demo' },
+      nativeComments: { count: 12, href: 'https://github.com/octo/demo/pull/42', status: 'ready' },
+      viewerLogin: 'octo-author',
+    }]);
+  });
+
+  it('ignores list navigation and issue links outside recognized PR rows', () => {
+    const document = parse(reactPrListHtml);
+    document.body.insertAdjacentHTML('beforeend', '<ul><li><a data-testid="listitem-title-link" href="/octo/demo/pull/99">Unrelated</a></li></ul>');
+    document.querySelector('[data-testid="listitem-title-link"]')!.setAttribute('href', '/octo/demo/issues/42');
+    expect(extractPullRequestRows(document)).toEqual([]);
+  });
+
   it('extracts the documented native comments from the current fixture', () => {
     expect(extractPullRequestRows(parse(currentPrListHtml))[0]?.nativeComments).toEqual({
       count: 2,
@@ -727,7 +745,7 @@ describe('extractTimeline', () => {
   it('makes a skipped resolvable thread incomplete while retaining next fragment discovery', () => {
     const result = extractTimeline(parse(`
       <div class="js-resolvable-timeline-thread-container" data-resolved="false"><span>no identifier</span></div>
-      <div id="js-timeline-progressive-loader" data-timeline-item-src="/o/r/pull/1/timeline?after=next"></div>
+      <form class="js-ajax-pagination" method="get" action="/o/r/pull/1/timeline?after=next"></form>
     `));
 
     expect(result.threads).toEqual([]);
@@ -867,4 +885,34 @@ describe('extractDiffSummary', () => {
       data: { additions: 0, deletions: 0, filesChanged: 0 },
     });
   });
+});
+
+
+describe('GitHub timeline pagination', () => {
+  it('follows the Load more form rather than the comment-anchor lookup helper', () => {
+    const result = extractTimeline(parse(paginationHtml));
+    expect(result.nextTimelineFragments).toEqual([
+      '/octo/demo/pull/42/timeline_more_items?after_cursor=Cursor%2BOne&before_cursor=Cursor%2BLast',
+    ]);
+  });
+
+  it('does not fetch the anchor helper on a fully rendered conversation', () => {
+    const document = parse(paginationHtml);
+    document.querySelector('form')!.remove();
+    expect(extractTimeline(document).nextTimelineFragments).toEqual([]);
+  });
+});
+
+
+it('marks unloaded review-thread pagination as partial without requesting hidden bodies', () => {
+  const result = extractTimeline(parse(`
+    <div id="discussion_bucket">
+      <form class="js-review-hidden-comment-ids js-ajax-pagination" method="get"
+        action="/octo/demo/pull/42/reviews/123/more_threads?after=1&before=2"
+        data-hidden-comment-ids="11,12"><button>1 hidden conversation</button></form>
+    </div>
+  `));
+  expect(result.nextTimelineFragments).toEqual([]);
+  expect(result.completeness.reviewThreads).toMatchObject({ isComplete: false });
+  expect(result.completeness.agents).toMatchObject({ isComplete: false });
 });
