@@ -108,7 +108,7 @@ export function PullRequestCard({ conversationHref, filesHref, onRetry, refreshi
   ];
   const loading = sections.some((section) => section.status === 'loading');
   const busy = refreshing || loading;
-  const canRetry = sections.some((section) => section.status === 'partial' || section.status === 'error');
+  const canRetry = sections.some((section) => section.status === 'error' || section.status === 'partial' && section.retryable);
 
   return <div className={`pr-overview-card${summary.authoredByViewer ? ' authored' : ''}`} data-testid="pr-card" role="group" aria-label="Pull request review overview" aria-busy={busy}>
     <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">

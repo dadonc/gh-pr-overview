@@ -32,8 +32,10 @@ diff counts retain their `+` suffix. Hovering explains what GitHub omitted.
 Visible rows are checked every minute and when the tab regains focus or becomes
 visible. Summaries older than 60 seconds refresh; a native comment-count change
 also requests fresh data. Existing counts stay visible while refreshing, and
-offscreen rows wait until they are near the viewport. A **Retry** button on
-partial or failed summaries bypasses the cache. It is disabled while loading.
+offscreen rows wait until they are near the viewport. A **Retry** button appears
+when a request fails, including a failed timeline fragment, and bypasses the
+cache. It is disabled while loading. Hidden or omitted data in successful
+responses keeps its incomplete-count label without a Retry button.
 
 Each request has a 15-second deadline covering both response headers and body
 download. A timeout displays a recoverable error and releases its request slot

@@ -44,7 +44,7 @@ interface PullRequestCardProps {
 ```
 
 - [x] Add failing tests for visible `≥0 unresolved`, `Codex ≥1`, and Retry invoking its handler once with an accessible button.
-- [x] Render Retry only for partial/error sections, disable it while refreshing, and include refreshing in aria-busy. Retain the current shadow styles and compact single line.
+- [x] Render Retry for errors and partial sections caused by failed requests, disable it while refreshing, and include refreshing in aria-busy. Structural partials do not offer Retry. Retain the current shadow styles and compact single line.
 - [x] Run the focused card tests and self-review accessibility.
 
 ## Task 3: Navigation activation, refresh scheduling, and integration
@@ -92,3 +92,11 @@ Files: `package.json`, `package-lock.json`; build compatibility changes only if 
 - Visual inspection confirms visible partial markers and the compact Retry button. Temporary screenshots remain outside the repository.
 - An initial full browser run had one Chrome fixture setup timeout before its test body; a subsequent isolated full verification passed all ten browser tests. No retry setting or test timeout was relaxed.
 - Signed-in real GitHub manual checks remain the release checklist in README; automated browser validation uses repository fixtures.
+
+## Retry correction — 2026-09-10
+
+- The original Retry condition treated all incomplete data as recoverable. Hidden/deferred review bodies remain absent when the same successful HTML is fetched again, so the button often produced no visible change.
+- Partial sections now carry retryability only when a timeline request failed. Structural incompleteness keeps its lower-bound label without offering Retry. Whole-section updates clear retryability after recovery.
+- Replaced the browser test that changed hidden data into complete data with a persistent-hidden-data case and HTTP 503 recovery cases for conversation, files, and timeline requests. These assert disabled Retry while loading and removal after successful recovery even when hidden data remains.
+- Independent review found no actionable issues. React Doctor reports 100/100 with no findings for the current changes.
+- Final `npm run verify` passed: 375 unit/integration tests, 13 browser tests, coverage gates, TypeScript, production build, manifest, icons, and bundle checks.

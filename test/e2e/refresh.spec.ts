@@ -74,9 +74,9 @@ async function routeRemotePullRequest(
   });
 }
 
-test('shows lower bounds for hidden conversation data and replaces them after Retry', async ({ extension }) => {
+test('shows lower bounds without a futile Retry for hidden conversation data', async ({ extension }) => {
   const requests: string[] = [];
-  let current: RemoteGeneration = {
+  const current: RemoteGeneration = {
     additions: 10,
     codexResponses: 1,
     deletions: 2,
@@ -91,26 +91,56 @@ test('shows lower bounds for hidden conversation data and replaces them after Re
   const card = row.locator('github-pr-overview .pr-overview-card');
   const nativeCounter = row.locator('a[aria-label="2 comments"]');
   await expect.poll(() => card.evaluate(visibleCardLine))
-    .toBe('≥0 unresolved · −2/+10 · 2 files · Codex ≥1 · Retry');
-  await expect(card.getByRole('button', { name: 'Retry pull request overview' })).toBeEnabled();
+    .toBe('≥0 unresolved · −2/+10 · 2 files · Codex ≥1');
+  await expect(card.getByRole('button', { name: 'Retry pull request overview' })).toHaveCount(0);
+  await expect(card.getByLabel('At least 0 unresolved review threads')).toHaveAttribute('title', /thread/i);
   await expect(nativeCounter).toHaveText('2');
-
-  current = {
-    additions: 20,
-    codexResponses: 2,
-    deletions: 5,
-    files: 3,
-    unresolved: 2,
-  };
-  await card.getByRole('button', { name: 'Retry pull request overview' }).click();
-
-  await expect.poll(() => card.evaluate(visibleCardLine))
-    .toBe('2 unresolved · −5/+20 · 3 files · Codex 2');
-  await expect(nativeCounter).toHaveText('2');
-  expect(requests.filter((url) => url === conversationUrl)).toHaveLength(2);
-  expect(requests.filter((url) => url === filesUrl)).toHaveLength(2);
+  expect(requests.filter((url) => url === conversationUrl)).toHaveLength(1);
+  expect(requests.filter((url) => url === filesUrl)).toHaveLength(1);
   await extension.expectNoFailures();
 });
+
+for (const target of ['conversation', 'files', 'timeline'] as const) {
+  test(`Retry recovers a failed ${target} request and disappears even when hidden data remains`, async ({ extension }) => {
+    let attempts = 0;
+    let finishRetry!: () => void;
+    const retryResponse = new Promise<void>((resolve) => { finishRetry = resolve; });
+    await extension.page.route(extension.urls[target], async (route) => {
+      attempts += 1;
+      if (attempts === 1) {
+        await route.fulfill({ status: 503, contentType: 'text/html', body: 'Service unavailable' });
+        return;
+      }
+      await retryResponse;
+      await route.fallback();
+    });
+    await extension.page.goto(extension.urls.prList);
+
+    const card = extension.page.locator('#issue_42 github-pr-overview .pr-overview-card');
+    const retry = card.getByRole('button', { name: 'Retry pull request overview' });
+    await expect(retry).toBeEnabled();
+    await expect(card.locator('[title*="503"]').first()).toBeVisible();
+    await retry.click();
+    try {
+      await expect.poll(() => attempts).toBe(2);
+      await expect(card).toHaveAttribute('aria-busy', 'true');
+      await expect(retry).toBeDisabled();
+    } finally {
+      finishRetry();
+    }
+
+    await expect.poll(() => card.evaluate(visibleCardLine))
+      .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1');
+    await expect(retry).toHaveCount(0);
+    await expect(card).toHaveAttribute('aria-busy', 'false');
+    expect(attempts).toBe(2);
+    await extension.expectNoFailures({
+      consoleErrors: ['error: Failed to load resource: the server responded with a status of 503 (Service Unavailable)'],
+      // The client aborts the rejected response body to release its request slot.
+      requestFailures: [`GET ${extension.urls[target]} net::ERR_ABORTED`],
+    });
+  });
+}
 
 test('revalidates a mounted card when the native comment count changes', async ({ extension }) => {
   const requests: string[] = [];

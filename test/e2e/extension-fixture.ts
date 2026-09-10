@@ -36,7 +36,7 @@ interface NativeCounterSnapshot {
 
 interface ExtensionHarness {
   currentRowHtml: string;
-  expectNoFailures(): Promise<void>;
+  expectNoFailures(expected?: { consoleErrors?: readonly string[]; requestFailures?: readonly string[] }): Promise<void>;
   installHostilePageCss(): Promise<void>;
   nativeCounterSnapshotsAtHostConnection(): Promise<NativeCounterSnapshot[]>;
   openPage(): Promise<Page>;
@@ -162,7 +162,7 @@ export const test = base.extend<{ extension: ExtensionHarness }>({
 
       await use({
         currentRowHtml: currentRow(fixtures.prList),
-        async expectNoFailures() {
+        async expectNoFailures(expected = {}) {
           await page.waitForLoadState('networkidle', { timeout: QUIESCENCE_TIMEOUT_MS });
           const deadline = Date.now() + QUIESCENCE_TIMEOUT_MS;
           let stableRounds = 0;
@@ -176,8 +176,8 @@ export const test = base.extend<{ extension: ExtensionHarness }>({
             throw new Error(`Browser diagnostics did not reach quiescence; pending routes: ${[...pendingRoutes.values()].join(', ') || 'none'}.`);
           }
           expect(diagnostics.pageErrors, `page errors: ${diagnostics.pageErrors.join('\n')}`).toEqual([]);
-          expect(diagnostics.consoleErrors, `console errors: ${diagnostics.consoleErrors.join('\n')}`).toEqual([]);
-          expect(diagnostics.requestFailures, `request failures: ${diagnostics.requestFailures.join('\n')}`).toEqual([]);
+          expect(diagnostics.consoleErrors, `console errors: ${diagnostics.consoleErrors.join('\n')}`).toEqual(expected.consoleErrors ?? []);
+          expect(diagnostics.requestFailures, `request failures: ${diagnostics.requestFailures.join('\n')}`).toEqual(expected.requestFailures ?? []);
           expect(diagnostics.unexpectedRequests, `unexpected requests: ${diagnostics.unexpectedRequests.join('\n')}`).toEqual([]);
           expect(diagnostics.contentScriptCssRequests, `content stylesheet requests: ${diagnostics.contentScriptCssRequests.join('\n')}`).toEqual([]);
         },

@@ -82,7 +82,7 @@ test('boots the unpacked extension with a rendered, isolated shadow card', async
   await expect(extension.page.locator('[id^="issue_"].js-issue-row')).toHaveCount(1);
   await expect(host).toHaveCount(1);
   await expect.poll(() => card.evaluate(readVisibleCardLine))
-    .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1 · Retry');
+    .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1');
   await expect(nativeCounter).toBeVisible();
 
   const typography = await card.evaluate((element) => {
@@ -152,7 +152,7 @@ test('boots the unpacked extension with a rendered, isolated shadow card', async
   expect(await nativeCounter.evaluate(readNativeCounterSnapshot)).toEqual(
     (await extension.nativeCounterSnapshotsAtHostConnection())[0],
   );
-  await expect(card.locator(':scope > .separator')).toHaveCount(3);
+  await expect(card.locator(':scope > .separator')).toHaveCount(2);
   await expect.poll(() => extension.page.evaluate(() =>
     getComputedStyle(document.querySelector<HTMLAnchorElement>('#issue_42 .Link--primary')!).fontSize,
   )).toBe('40px');
@@ -176,7 +176,7 @@ test('keeps the strict line inside the row and scrolls it internally at narrow w
   const row = extension.page.locator('#issue_42');
   const card = row.locator('github-pr-overview').locator('.pr-overview-card');
   await expect.poll(() => card.evaluate(readVisibleCardLine))
-    .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1 · Retry');
+    .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1');
 
   const layout = await card.evaluate((element) => {
     const visibleChildren = [...element.querySelectorAll<HTMLElement>(
@@ -224,7 +224,7 @@ test('reconciles inserted rows and restores native UI across pushState remounts'
   const nativeCounter = row.locator('a[aria-label="2 comments"]');
   await expect(host).toHaveCount(1);
   await expect.poll(() => host.locator('.pr-overview-card').evaluate(readVisibleCardLine))
-    .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1 · Retry');
+    .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1');
   await expect(nativeCounter).toBeVisible();
   const pristineNativeCounter = await extension.nativeCounterSnapshotsAtHostConnection().then((snapshots) => snapshots[0]!);
 
@@ -238,7 +238,7 @@ test('reconciles inserted rows and restores native UI across pushState remounts'
   const inserted = extension.page.locator('#issue_420');
   await expect(inserted.locator('github-pr-overview')).toHaveCount(1);
   await expect.poll(() => inserted.locator('.pr-overview-card').evaluate(readVisibleCardLine))
-    .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1 · Retry');
+    .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1');
   await expect(inserted.locator('a[aria-label="2 comments"]')).toBeVisible();
   await expect(extension.page.locator('github-pr-overview')).toHaveCount(2);
 
@@ -262,7 +262,7 @@ test('reconciles inserted rows and restores native UI across pushState remounts'
   const remountedHost = remountedRow.locator('github-pr-overview');
   await expect(remountedHost).toHaveCount(1);
   await expect.poll(() => remountedHost.locator('.pr-overview-card').evaluate(readVisibleCardLine))
-    .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1 · Retry');
+    .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1');
   const remountedCounter = remountedRow.locator('a[aria-label="7 comments"]');
   await expect(remountedCounter).toBeVisible();
   await expect(remountedCounter).toHaveText('7');
@@ -337,7 +337,7 @@ test('renders on the redesigned React list through row replacement and toolbar t
   const counter = row.locator('[class^="MetadataContainer"]');
   const originalCounter = await counter.evaluate((element) => element.outerHTML);
   await expect.poll(() => card.evaluate(readVisibleCardLine))
-    .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1 · Retry');
+    .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1');
   await expect(card).toHaveClass(/authored/);
   await expect(counter).toBeVisible();
   expect(await row.locator('[data-pr-overview-mount-anchor]').evaluate((anchor) =>
@@ -351,12 +351,12 @@ test('renders on the redesigned React list through row replacement and toolbar t
   });
   await expect(card).toHaveCount(1);
   await expect.poll(() => card.evaluate(readVisibleCardLine))
-    .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1 · Retry');
+    .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1');
   await extension.setEnabled(false);
   await expect(card).toHaveCount(0);
   await extension.setEnabled(true);
   await expect.poll(() => card.evaluate(readVisibleCardLine))
-    .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1 · Retry');
+    .toBe('0 unresolved · −353/+524 · 18 files · Copilot ≥1');
   expect(await counter.evaluate((element) => element.outerHTML)).toBe(originalCounter);
   await extension.expectNoFailures();
 });

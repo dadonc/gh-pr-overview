@@ -147,11 +147,24 @@ describe('PullRequestCard', () => {
     )).toBeInTheDocument();
   });
 
-  it('offers one accessible retry for partial or error data and invokes its handler once', async () => {
+  it('does not offer retry for data omitted from otherwise successful responses', () => {
+    render(<PullRequestCard summary={{
+      ...ready,
+      reviewThreads: { data: { total: 1, unresolved: 0, resolvedOrOutdated: 1 }, reason: 'Hidden conversations.', status: 'partial' },
+      diff: { data: { additions: 10, deletions: 2, filesChanged: 1 }, reason: 'Collapsed files.', status: 'partial' },
+      agents: { data: [], reason: 'Deferred review bodies.', status: 'partial' },
+    }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" onRetry={vi.fn()} />);
+
+    expect(screen.queryByRole('button', { name: 'Retry pull request overview' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('At least 0 unresolved review threads')).toBeVisible();
+    expect(screen.getByText('No AI agents detected yet')).toBeVisible();
+  });
+
+  it('offers one accessible retry for failed requests, including partial results, and invokes its handler once', async () => {
     const onRetry = vi.fn();
     const { rerender } = render(<PullRequestCard summary={{
       ...ready,
-      reviewThreads: { data: { total: 8, unresolved: 0, resolvedOrOutdated: 6 }, reason: 'timeline is incomplete', status: 'partial' },
+      reviewThreads: { data: { total: 8, unresolved: 0, resolvedOrOutdated: 6 }, reason: 'A timeline request failed.', retryable: true, status: 'partial' },
     }} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" onRetry={onRetry} />);
 
     const retry = screen.getByRole('button', { name: 'Retry pull request overview' });
@@ -169,7 +182,7 @@ describe('PullRequestCard', () => {
     const onRetry = vi.fn();
     const partial: PullRequestSummary = {
       ...ready,
-      agents: { data: ready.agents.status === 'ready' ? ready.agents.data : [], reason: 'timeline is incomplete', status: 'partial' },
+      agents: { data: ready.agents.status === 'ready' ? ready.agents.data : [], reason: 'A timeline request failed.', retryable: true, status: 'partial' },
     };
     const { rerender } = render(<PullRequestCard summary={partial} conversationHref="/o/r/pull/1" filesHref="/o/r/pull/1/files" onRetry={onRetry} refreshing />);
 

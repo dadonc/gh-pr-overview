@@ -1,7 +1,7 @@
 export type SectionState<T> =
   | { status: 'loading' }
   | { data: T; status: 'ready' }
-  | { data: T; reason: string; status: 'partial' }
+  | { data: T; reason: string; retryable?: boolean; status: 'partial' }
   | { message: string; status: 'error' };
 
 export interface ReviewThread {

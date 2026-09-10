@@ -229,10 +229,10 @@ function cacheKey(identity: PullRequestIdentity): string {
   return `${identity.owner.toLowerCase()}/${identity.repository.toLowerCase()}#${identity.number}`;
 }
 
-function sectionFromCompleteness<T>(data: T, isComplete: boolean, reasons: readonly string[]): SectionState<T> {
+function sectionFromCompleteness<T>(data: T, isComplete: boolean, reasons: readonly string[], retryable = false): SectionState<T> {
   return isComplete
     ? { data, status: 'ready' }
-    : { data, reason: reasons.join(' '), status: 'partial' };
+    : { data, reason: reasons.join(' '), status: 'partial', ...(retryable ? { retryable: true } : {}) };
 }
 
 function isAuthenticationDocument(document: Document): boolean {
@@ -440,9 +440,9 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
         threadReplies: timeline.artifacts.threadReplies,
       });
       const outcome: TimelineLoadOutcome = {
-        agents: sectionFromCompleteness(agentData, agentReasons.size === 0, [...agentReasons]),
+        agents: sectionFromCompleteness(agentData, agentReasons.size === 0, [...agentReasons], retryableFailure),
         retryableFailure,
-        reviewThreads: sectionFromCompleteness(threadData, threadReasons.size === 0, [...threadReasons]),
+        reviewThreads: sectionFromCompleteness(threadData, threadReasons.size === 0, [...threadReasons], retryableFailure),
       };
       publish(loadOptions, { agents: outcome.agents, kind: 'timeline', reviewThreads: outcome.reviewThreads });
       return outcome;

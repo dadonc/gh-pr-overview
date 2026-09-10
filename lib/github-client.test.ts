@@ -233,13 +233,13 @@ describe('GitHub pull-request data pipeline', () => {
     const timeline = updates.find((update) => update.kind === 'timeline');
 
     expect(timeline).toMatchObject({
-      agents: { status: 'partial' },
+      agents: { retryable: true, status: 'partial' },
       kind: 'timeline',
-      reviewThreads: { status: 'partial' },
+      reviewThreads: { retryable: true, status: 'partial' },
     });
     expect(summary.diff.status).toBe('ready');
-    expect(summary.agents.status).toBe('partial');
-    expect(summary.reviewThreads.status).toBe('partial');
+    expect(summary.agents).toMatchObject({ retryable: true, status: 'partial' });
+    expect(summary.reviewThreads).toMatchObject({ retryable: true, status: 'partial' });
   });
 
   it('uses GitHub request metadata only for timeline fragment fetches', async () => {
@@ -930,7 +930,9 @@ describe('GitHub pull-request data pipeline', () => {
     });
     const client = clientFor(fetcher);
 
-    await client.loadPullRequest(identity);
+    const summary = await client.loadPullRequest(identity);
+    expect(summary.agents.status).toBe('partial');
+    expect(summary.agents).not.toHaveProperty('retryable', true);
     await client.loadPullRequest(identity);
 
     expect(fetcher).toHaveBeenCalledTimes(3);
