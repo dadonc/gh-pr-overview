@@ -19,6 +19,8 @@ the choice persists across browser restarts and extension updates.
 - Active unresolved review threads as `X unresolved`. The extension still
   computes the complete thread totals and resolved-or-outdated breakdown
   internally.
+- Conflicting files as `X conflicts` immediately after the unresolved count,
+  shown only when GitHub reports conflicts.
 - Deletions, additions, and files changed as `−X/+X X files`.
 - Participation from an explicit allowlist of AI coding and review agents as
   `Name responseCount`, including a zero count when an agent was requested but
@@ -27,19 +29,21 @@ the choice persists across browser restarts and extension updates.
 
 Thread and agent counts use plain numbers, including when data is incomplete.
 Hover and screen-reader descriptions explain what GitHub omitted. Partial
-diff counts retain their `+` suffix.
+diff counts retain their `+` suffix. Conflict counts stay hidden when merge-status
+data is unavailable, and reappear after a successful refresh.
 
 Visible rows are checked every minute and when the tab regains focus or becomes
 visible. Summaries older than 60 seconds refresh; a native comment-count change
 also requests fresh data. Existing counts stay visible while refreshing, and
 offscreen rows wait until they are near the viewport. A **Retry** button appears
-when a request fails, including a failed timeline fragment, and bypasses the
-cache. It is disabled while loading. Hidden or omitted data in successful
+when a thread, agent, or diff request fails, including a failed timeline
+fragment, and bypasses the cache. It is disabled while loading. Hidden or omitted data in successful
 responses keeps its incomplete-count label without a Retry button.
 
 Each request has a 15-second deadline covering both response headers and body
-download. A timeout displays a recoverable error and releases its request slot
-so subsequent rows can load. Disabling the extension or leaving the list
+download. A timeout releases its request slot so subsequent rows can load,
+and displays a recoverable error for thread, agent, or diff data.
+Disabling the extension or leaving the list
 cancels work and removes refresh timers and listeners.
 
 The extension overview stays on one line, with its metrics separated by `·`.
@@ -60,7 +64,7 @@ The extension:
 
 - only reads GitHub pages that the current signed-in user can already access;
 - makes authenticated, same-origin `GET` requests to GitHub conversation,
-  timeline-fragment, and files pages;
+  timeline-fragment, and files pages, plus merge-status JSON;
 - never posts, edits, resolves, or deletes GitHub data;
 - never sends repository, pull-request, comment, or account data to an external
   service;

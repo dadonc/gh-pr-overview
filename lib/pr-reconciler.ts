@@ -264,12 +264,14 @@ class RowController {
         ...current,
         agents: mergeSection(current.agents, remote.agents),
         authoredByViewer: loadingSummary(extraction).authoredByViewer,
+        ...('conflicts' in remote ? { conflicts: remote.conflicts } : {}),
         diff: mergeSection(current.diff, remote.diff),
         reviewThreads: mergeSection(current.reviewThreads, remote.reviewThreads),
       }));
     };
     const mergeUpdate = (update: PullRequestRemoteUpdate) => {
       if (update.kind === 'diff') mergeRemote({ diff: update.diff });
+      else if (update.kind === 'conflicts') mergeRemote({ conflicts: update.conflicts });
       else if (update.kind === 'timeline') {
         mergeRemote({ agents: update.agents, reviewThreads: update.reviewThreads });
       } else {
@@ -296,6 +298,7 @@ class RowController {
         ...current,
         agents: errorSection('agents', current.agents),
         authoredByViewer: loadingSummary(extraction).authoredByViewer,
+        conflicts: undefined,
         diff: errorSection('diff', current.diff),
         reviewThreads: errorSection('reviewThreads', current.reviewThreads),
       }));

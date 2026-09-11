@@ -10,8 +10,8 @@ export const CARD_STYLES = `
 .metric { color: var(--fgColor-muted, #59636e); text-decoration: none; }
 .metric:hover { color: var(--fgColor-accent, #0969da); text-decoration: underline; }
 .metric:focus-visible { outline: 2px solid var(--focus-outlineColor, #0969da); outline-offset: 2px; border-radius: 2px; }
-.unresolved { font-weight: 600; }
-.deletions { color: var(--fgColor-danger, var(--color-danger-fg, #d1242f)); }
+.unresolved, .conflicts { font-weight: 600; }
+.deletions, .conflicts { color: var(--fgColor-danger, var(--color-danger-fg, #d1242f)); }
 .additions { color: var(--fgColor-success, var(--color-success-fg, #1a7f37)); }
 .agent { color: var(--fgColor-default, #1f2328); }
 .retry { flex: 0 0 auto; border: 0; padding: 0; color: var(--fgColor-accent, #0969da); background: transparent; font: inherit; cursor: pointer; }
@@ -20,7 +20,7 @@ export const CARD_STYLES = `
 .retry:disabled { color: var(--fgColor-muted, #59636e); cursor: default; text-decoration: none; }
 .separator { color: var(--fgColor-muted, #59636e); margin-inline: 5px; user-select: none; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-@media (prefers-color-scheme: dark) { .pr-overview-card { color: var(--fgColor-default, #f0f6fc); background: var(--bgColor-default, #0d1117); border-color: var(--borderColor-muted, #30363d); } .deletions { color: var(--fgColor-danger, var(--color-danger-fg, #f85149)); } .additions { color: var(--fgColor-success, var(--color-success-fg, #3fb950)); } .agent { color: var(--fgColor-default, #f0f6fc); } }
+@media (prefers-color-scheme: dark) { .pr-overview-card { color: var(--fgColor-default, #f0f6fc); background: var(--bgColor-default, #0d1117); border-color: var(--borderColor-muted, #30363d); } .deletions, .conflicts { color: var(--fgColor-danger, var(--color-danger-fg, #f85149)); } .additions { color: var(--fgColor-success, var(--color-success-fg, #3fb950)); } .agent { color: var(--fgColor-default, #f0f6fc); } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 `;
 
@@ -101,6 +101,7 @@ function Agents({ section }: { section: PullRequestSummary['agents'] }) {
 }
 
 export function PullRequestCard({ conversationHref, filesHref, onRetry, refreshing = false, summary }: PullRequestCardProps) {
+  const { conflicts = 0 } = summary;
   const sections = [
     summary.reviewThreads,
     summary.diff,
@@ -116,6 +117,12 @@ export function PullRequestCard({ conversationHref, filesHref, onRetry, refreshi
     </span>
     {summary.authoredByViewer && <span className="sr-only">Authored by you</span>}
     <ReviewThreads section={summary.reviewThreads} href={conversationHref} />
+    {conflicts > 0 && <>
+      <Separator />
+      <a className="metric conflicts" href={conversationHref} aria-label={countLabel(conflicts, 'file with merge conflicts', 'files with merge conflicts')}>
+        {countLabel(conflicts, 'conflict')}
+      </a>
+    </>}
     <Separator />
     <Diff section={summary.diff} href={filesHref} />
     <Separator />

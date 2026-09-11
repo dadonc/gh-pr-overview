@@ -7,6 +7,7 @@ import {
   type SectionState,
 } from './domain';
 import type { PullRequestIdentity } from './domain';
+import { extractMergeConflictCount, hasMergeBox } from './github-conflicts';
 import {
   extractDiffSummary,
   extractTimeline,
@@ -29,12 +30,14 @@ export { isValidPullRequestIdentity } from './github-url';
 /** Remote data only. Native comment totals stay on their live PR-list row. */
 export interface PullRequestRemoteSummary {
   agents: SectionState<readonly AgentParticipation[]>;
+  conflicts?: number;
   diff: SectionState<DiffSummary>;
   reviewThreads: SectionState<ReviewThreadCounts>;
 }
 
 export type PullRequestRemoteUpdate =
   | { kind: 'diff'; diff: PullRequestRemoteSummary['diff'] }
+  | { kind: 'conflicts'; conflicts: number | undefined }
   | {
       kind: 'timeline';
       agents: PullRequestRemoteSummary['agents'];
@@ -48,7 +51,7 @@ export interface PullRequestLoadOptions {
   signal?: AbortSignal;
 }
 
-export type PullRequestUrlKind = 'conversation' | 'files' | 'fragment';
+export type PullRequestUrlKind = 'conversation' | 'files' | 'fragment' | 'merge-status';
 
 export interface FetchLimiter {
   run<T>(signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T>;
@@ -158,7 +161,7 @@ function normalizeTimelineFragment(
 
 /**
  * Validates every navigation target before it crosses the fetch boundary.
- * Timeline fragments are intentionally the only non-page target allowed.
+ * Non-page targets are limited to timeline fragments and read-only merge status.
  */
 export function isAllowedPullRequestUrl(
   candidate: string,
@@ -170,6 +173,13 @@ export function isAllowedPullRequestUrl(
   if (!url) return false;
 
   const base = pullRequestPath(identity);
+  if (kind === 'merge-status') {
+    return url.pathname.toLowerCase() === `${base}/page_data/merge_box`.toLowerCase()
+      && !url.hash
+      && url.searchParams.size === 2
+      && url.searchParams.get('merge_method') === 'MERGE'
+      && url.searchParams.get('bypass_requirements') === 'false';
+  }
   const sameConversationPath = url.pathname.toLowerCase() === base.toLowerCase();
   if (kind === 'conversation') return sameConversationPath && !url.search && !url.hash;
   if (kind === 'files') {
@@ -269,15 +279,17 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
     }
   };
 
-  const fetchDocument = async (
+  const fetchResource = async <T>(
     target: string,
     identity: PullRequestIdentity,
     kind: PullRequestUrlKind,
     signal: AbortSignal | undefined,
+    decode: (response: Response) => Promise<T>,
     headers?: HeadersInit,
-  ): Promise<Document> => {
+  ): Promise<T> => {
     if (!isAllowedPullRequestUrl(target, identity, kind)) throw new Error('GitHub URL was not allowed.');
     if (signal?.aborted) throw abortError();
+    const rejectRedirects = kind === 'fragment' || kind === 'merge-status';
     return limiter.run(signal, async () => {
       const requestController = new AbortController();
       let timedOut = false;
@@ -299,22 +311,18 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
       const request: RequestInit = {
         credentials: 'same-origin',
         method: 'GET',
-        redirect: kind === 'fragment' ? 'error' : 'follow',
+        redirect: rejectRedirects ? 'error' : 'follow',
         signal: requestController.signal,
       };
       if (headers) request.headers = headers;
       const networkRequest = async () => {
         const response = await fetcher(target, request);
         const finalUrl = response.url || target;
-        if (kind === 'fragment' && response.url !== target) throw new Error('GitHub redirected to an untrusted URL.');
+        if (rejectRedirects && response.url !== target) throw new Error('GitHub redirected to an untrusted URL.');
         if (!isAllowedPullRequestUrl(finalUrl, identity, kind)) throw new Error('GitHub redirected to an untrusted URL.');
         if (response.status === 401 || response.status === 403) throw new Error('GitHub access was denied.');
         if (!response.ok) throw new Error(`GitHub request failed (${response.status}).`);
-        const contentType = response.headers.get('content-type') ?? '';
-        if (!/^text\/html(?:;|$)/i.test(contentType)) throw new Error('GitHub did not return HTML.');
-        const document = parseDocument(await response.text());
-        if (isAuthenticationDocument(document)) throw new Error('GitHub access was denied.');
-        return document;
+        return decode(response);
       };
       try {
         return await Promise.race([networkRequest(), deadline]);
@@ -329,6 +337,20 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
       }
     });
   };
+
+  const fetchDocument = (
+    target: string,
+    identity: PullRequestIdentity,
+    kind: PullRequestUrlKind,
+    signal: AbortSignal | undefined,
+    headers?: HeadersInit,
+  ): Promise<Document> => fetchResource(target, identity, kind, signal, async response => {
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!/^text\/html(?:;|$)/i.test(contentType)) throw new Error('GitHub did not return HTML.');
+    const document = parseDocument(await response.text());
+    if (isAuthenticationDocument(document)) throw new Error('GitHub access was denied.');
+    return document;
+  }, headers);
 
   const loadUncached = async (identity: PullRequestIdentity, loadOptions?: PullRequestLoadOptions): Promise<LoadOutcome> => {
     const signal = loadOptions?.signal;
@@ -358,7 +380,30 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
       return { diff, retryableFailure: !files.ok };
     });
 
-    const timelinePromise = settle(conversationTarget, 'conversation').then(async (conversation): Promise<TimelineLoadOutcome> => {
+    const conversationPromise = settle(conversationTarget, 'conversation');
+    const conflictsPromise = conversationPromise.then(async conversation => {
+      if (!conversation.ok || !hasMergeBox(conversation.document)) return { conflicts: undefined, retryableFailure: false };
+      try {
+        const headers = fragmentRequestHeaders(conversation.document);
+        headers.set('Accept', 'application/json');
+        headers.set('GitHub-Verified-Fetch', 'true');
+        const target = `${conversationTarget}/page_data/merge_box?merge_method=MERGE&bypass_requirements=false`;
+        const conflicts = await fetchResource(target, identity, 'merge-status', signal, async response => {
+          if (!/^application\/json(?:;|$)/i.test(response.headers.get('content-type') ?? '')) {
+            throw new Error('GitHub did not return merge-status JSON.');
+          }
+          return extractMergeConflictCount(JSON.parse(await response.text()));
+        }, headers);
+        publish(loadOptions, { kind: 'conflicts', conflicts });
+        return { conflicts, retryableFailure: false };
+      } catch (error) {
+        if (isAbort(error)) throw error;
+        publish(loadOptions, { kind: 'conflicts', conflicts: undefined });
+        return { conflicts: undefined, retryableFailure: true };
+      }
+    });
+
+    const timelinePromise = conversationPromise.then(async (conversation): Promise<TimelineLoadOutcome> => {
       if (!conversation.ok) {
         const message = conversation.error.message;
         const outcome: TimelineLoadOutcome = {
@@ -448,11 +493,12 @@ export function createGitHubClient(options: GitHubClientOptions = {}) {
       return outcome;
     });
 
-    const [diff, timeline] = await Promise.all([diffPromise, timelinePromise]);
+    const [diff, timeline, conflicts] = await Promise.all([diffPromise, timelinePromise, conflictsPromise]);
     return {
-      retryableFailure: diff.retryableFailure || timeline.retryableFailure,
+      retryableFailure: diff.retryableFailure || timeline.retryableFailure || conflicts.retryableFailure,
       summary: {
         agents: timeline.agents,
+        conflicts: conflicts.conflicts,
         diff: diff.diff,
         reviewThreads: timeline.reviewThreads,
       },

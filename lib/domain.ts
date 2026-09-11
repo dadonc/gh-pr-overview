@@ -74,6 +74,8 @@ export interface PullRequestIdentity {
 export interface PullRequestSummary {
   agents: SectionState<readonly AgentParticipation[]>;
   authoredByViewer: boolean;
+  /** Number of conflicting files; omitted when GitHub has not exposed a count. */
+  conflicts?: number;
   diff: SectionState<DiffSummary>;
   reviewThreads: SectionState<ReviewThreadCounts>;
 }

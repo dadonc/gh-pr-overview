@@ -205,6 +205,40 @@ afterEach(() => {
   resetBrowserMock();
 });
 
+it.each([
+  [['src/app.ts', 'README.md'], '0 unresolved · 2 conflicts · −353/+524 · 18 files · No AI agents'],
+  [['src/app.ts'], '0 unresolved · 1 conflict · −353/+524 · 18 files · No AI agents'],
+  [[], '0 unresolved · −353/+524 · 18 files · No AI agents'],
+])('renders merge-conflict data from the real client through the banner', async (files, expected) => {
+  currentPullRequestRow();
+  const context = createFakeContext();
+  await loadContentEntrypoint(async input => {
+    const url = String(input);
+    if (url.includes('/page_data/merge_box?')) {
+      const result = response(JSON.stringify({
+        pullRequest: { state: 'OPEN' },
+        mergeRequirements: { conditions: [{
+          type: 'PULL_REQUEST_MERGE_CONFLICT_STATE', result: files.length ? 'FAILED' : 'PASSED', conflicts: files,
+        }] },
+      }), url);
+      result.headers.set('content-type', 'application/json');
+      return result;
+    }
+    return response(url.endsWith('/files') ? currentFilesHtml
+      : '<react-app app-name="pull-requests"><div id="discussion_bucket"></div></react-app>', url);
+  });
+
+  await definition.main(context.value);
+
+  await waitFor(() => expect(renderedOverviewLine()).toBe(expected));
+  const conflicts = document.querySelector('github-pr-overview')?.shadowRoot?.querySelector('.conflicts');
+  if (files.length) {
+    expect(conflicts).toHaveAttribute('aria-label', `${files.length} ${files.length === 1 ? 'file' : 'files'} with merge conflicts`);
+  } else {
+    expect(conflicts).toBeNull();
+  }
+});
+
 it('renders the real content entrypoint and never mutates the native counter', async () => {
   currentPullRequestRow();
   const nativeCounter = document.querySelector<HTMLAnchorElement>('a[aria-label="2 comments"]')!;

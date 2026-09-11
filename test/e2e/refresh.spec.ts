@@ -5,6 +5,40 @@ import { expect, test } from './extension-fixture';
 const conversationUrl = 'https://github.com/octo/demo/pull/42';
 const filesUrl = `${conversationUrl}/files`;
 
+test('shows conflicting files after unresolved threads and removes the count when resolved', async ({ extension }) => {
+  let conflicts = ['src/app.ts', 'README.md'];
+  await extension.page.route(`${conversationUrl}/**`, async route => {
+    if (route.request().url().includes('/page_data/merge_box?')) {
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({
+        pullRequest: { state: 'OPEN' },
+        mergeRequirements: { conditions: [{
+          type: 'PULL_REQUEST_MERGE_CONFLICT_STATE', result: conflicts.length ? 'FAILED' : 'PASSED', conflicts,
+        }] },
+      }) });
+    } else await route.fallback();
+  });
+  await extension.page.route(conversationUrl, route => route.fulfill({
+    contentType: 'text/html',
+    body: '<react-app app-name="pull-requests"><div id="discussion_bucket"></div></react-app>',
+  }));
+  await extension.page.goto(extension.urls.prList);
+  const row = extension.page.locator('#issue_42');
+  const card = row.locator('.pr-overview-card');
+  await expect.poll(() => card.evaluate(visibleCardLine))
+    .toBe('0 unresolved · 2 conflicts · −353/+524 · 18 files · No AI agents');
+  await expect(card.getByRole('link', { name: '2 files with merge conflicts' })).toBeVisible();
+
+  conflicts = [];
+  await row.locator('a[aria-label="2 comments"]').evaluate(counter => {
+    counter.setAttribute('aria-label', '3 comments');
+    counter.textContent = '3';
+  });
+  await expect.poll(() => card.evaluate(visibleCardLine))
+    .toBe('0 unresolved · −353/+524 · 18 files · No AI agents');
+  await expect(card.locator('.conflicts')).toHaveCount(0);
+  await extension.expectNoFailures();
+});
+
 function conversationHtml(unresolved: number, codexResponses: number, partial = false): string {
   const threads = Array.from({ length: unresolved }, (_, index) => `
     <div class="js-resolvable-timeline-thread-container" data-resolved="false">
