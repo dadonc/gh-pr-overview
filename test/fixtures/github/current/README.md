@@ -1,5 +1,17 @@
 # Current GitHub fixture set
 
+## Repo app changes wrapper (2026-09-14)
+
+`changes-repo.html` retains the diff summary structure captured from the
+signed-in files-changed page (redirected to `/changes`). GitHub now wraps the
+same `payload.pullRequestsChangesRoute` in `react-app[app-name="repo"]`.
+Only numeric diff metrics, change types, and file-limit fields are retained;
+repository, user, file content, paths, and session data are omitted.
+Expected totals: 1,301 additions, 674 deletions, 12 files. The older
+`changes.html` fixture covers the `pull-requests` app wrapper.
+
+## Original fixture set
+
 - Capture date: 2026-07-29
 - Public structural references:
   - `https://github.com/microsoft/vscode/pulls`

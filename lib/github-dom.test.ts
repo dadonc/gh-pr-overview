@@ -4,6 +4,7 @@ import reactPrListHtml from '../test/fixtures/github/current/pr-list-react.html?
 import paginationHtml from '../test/fixtures/github/current/timeline-pagination.html?raw';
 import currentPrListHtml from '../test/fixtures/github/current/pr-list.html?raw';
 import currentChangesHtml from '../test/fixtures/github/current/changes.html?raw';
+import repoChangesHtml from '../test/fixtures/github/current/changes-repo.html?raw';
 import currentFilesHtml from '../test/fixtures/github/current/files.html?raw';
 import currentFilesNoAggregateHtml from '../test/fixtures/github/current/files-no-aggregate.html?raw';
 import currentAutomatedCommentHtml from '../test/fixtures/github/current/automated-comment.html?raw';
@@ -761,6 +762,13 @@ describe('extractTimeline', () => {
 });
 
 describe('extractDiffSummary', () => {
+  it('extracts exact diff totals from the repo app wrapper', () => {
+    expect(extractDiffSummary(parse(repoChangesHtml))).toEqual({
+      completeness: { isComplete: true, reasons: [] },
+      data: { additions: 1301, deletions: 674, filesChanged: 12 },
+    });
+  });
+
   it('uses exact per-file summaries from the new pull requests changes app', () => {
     expect(extractDiffSummary(parse(currentChangesHtml))).toEqual({
       completeness: { isComplete: true, reasons: [] },

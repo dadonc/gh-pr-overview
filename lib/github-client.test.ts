@@ -5,6 +5,7 @@ import diffRenderedPartialHtml from '../test/fixtures/github/diff-rendered-parti
 import timelineHtml from '../test/fixtures/github/timeline.html?raw';
 import currentPrListHtml from '../test/fixtures/github/current/pr-list.html?raw';
 import currentChangesHtml from '../test/fixtures/github/current/changes.html?raw';
+import repoChangesHtml from '../test/fixtures/github/current/changes-repo.html?raw';
 import currentConversationHtml from '../test/fixtures/github/current/conversation.html?raw';
 import currentFilesHtml from '../test/fixtures/github/current/files.html?raw';
 import currentTimelineFragmentHtml from '../test/fixtures/github/current/timeline-fragment.html?raw';
@@ -504,7 +505,10 @@ describe('GitHub pull-request data pipeline', () => {
     expect(summary.reviewThreads.status).toBe('ready');
   });
 
-  it('follows the same-PR files redirect to changes and parses the diff', async () => {
+  it.each([
+    { app: 'pull-requests', html: currentChangesHtml, data: { additions: 584, deletions: 174, filesChanged: 14 } },
+    { app: 'repo', html: repoChangesHtml, data: { additions: 1301, deletions: 674, filesChanged: 12 } },
+  ])('follows the same-PR files redirect to changes in the $app app', async ({ html, data }) => {
     const fetcher = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
       const value = String(url);
       expect(init).toMatchObject({
@@ -513,7 +517,7 @@ describe('GitHub pull-request data pipeline', () => {
         redirect: 'follow',
       });
       return value.endsWith('/files')
-        ? response(currentChangesHtml, 'https://github.com/octo/demo/pull/42/changes')
+        ? response(html, 'https://github.com/octo/demo/pull/42/changes')
         : response('<div id="discussion_bucket"></div>', value);
     });
 
@@ -524,7 +528,7 @@ describe('GitHub pull-request data pipeline', () => {
       expect.objectContaining({ redirect: 'follow' }),
     );
     expect(summary.diff).toEqual({
-      data: { additions: 584, deletions: 174, filesChanged: 14 },
+      data,
       status: 'ready',
     });
   });

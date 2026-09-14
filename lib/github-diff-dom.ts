@@ -41,7 +41,7 @@ function parseEmbeddedMetric(value: unknown): number | undefined {
 
 function extractChangesAppSummary(document: Document): DiffExtraction | undefined {
   const scripts = document.querySelectorAll(
-    'react-app[app-name="pull-requests"] '
+    'react-app:is([app-name="pull-requests"], [app-name="repo"]) '
     + 'script[type="application/json"][data-target="react-app.embeddedData"]',
   );
 
